@@ -14,6 +14,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// echoHandler sends one received message straight back.
+func echoHandler(_ any, stream grpc.ServerStream) error {
+	var body rawBytes
+	if err := stream.RecvMsg(&body); err != nil {
+		return err
+	}
+	return stream.SendMsg(&body)
+}
+
 func startEcho(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -24,13 +33,7 @@ func startEcho(t *testing.T) string {
 		t.Fatal(err)
 	}
 
-	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
-		var body rawBytes
-		if err := stream.RecvMsg(&body); err != nil {
-			return err
-		}
-		return stream.SendMsg(&body)
-	}))
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(echoHandler))
 	t.Cleanup(srv.Stop)
 	go srv.Serve(lis)
 
@@ -39,12 +42,16 @@ func startEcho(t *testing.T) string {
 
 func startProxy(t *testing.T, echoAddr string, injects []fault.Inject) *Proxy {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	cfg := &config.Config{
+	return startProxyWithConfig(t, &config.Config{
 		Listen: config.Listen{Addr: "127.0.0.1:0"},
 		Target: config.Target{Addr: echoAddr},
-	}
+	}, injects)
+}
+
+func startProxyWithConfig(t *testing.T, cfg *config.Config, injects []fault.Inject) *Proxy {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	p, err := New(ctx, cfg, injects)
 	if err != nil {
 		t.Fatal(err)
