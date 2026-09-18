@@ -22,7 +22,7 @@ rules:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path)
+	w, err := Watch(ctx, path, make(chan struct{}, 1))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +51,7 @@ rules:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path)
+	w, err := Watch(ctx, path, make(chan struct{}, 1))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,7 +102,7 @@ target: "localhost:50051"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path)
+	w, err := Watch(ctx, path, make(chan struct{}, 1))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ target: "localhost:50051"
 
 func TestWatch_InvalidPath(t *testing.T) {
 	ctx := context.Background()
-	_, err := Watch(ctx, "/nonexistent/tamper.yaml")
+	_, err := Watch(ctx, "/nonexistent/tamper.yaml", make(chan struct{}, 1))
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -134,7 +134,7 @@ target: "localhost:50051"
 `)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	_, err := Watch(ctx, path)
+	_, err := Watch(ctx, path, make(chan struct{}, 1))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

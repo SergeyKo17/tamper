@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/SergeyKo17/tamper/fault"
@@ -17,7 +18,7 @@ type Proxy struct {
 	server  *grpc.Server
 	conn    *grpc.ClientConn
 	lis     net.Listener
-	injects []fault.Inject
+	injects atomic.Pointer[[]fault.Inject]
 }
 
 // New creates a Proxy that listens on listenAddr and forwards to targetAddr.
@@ -44,6 +45,11 @@ func New(ctx context.Context, listenAddr, targetAddr string, injects []fault.Inj
 // Addr returns the listener's network address.
 func (p *Proxy) Addr() net.Addr {
 	return p.lis.Addr()
+}
+
+// SetInjects atomically replaces the active fault injectors.
+func (p *Proxy) SetInjects(injects []fault.Inject) {
+	p.injects.Store(&injects)
 }
 
 // rawBytes implements proto.Message and grpc encoding interfaces to pass

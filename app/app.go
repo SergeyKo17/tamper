@@ -12,7 +12,8 @@ import (
 
 // New loads the configuration, creates fault injectors, and assembles the proxy.
 func New(ctx context.Context, path string) (*proxy.Proxy, error) {
-	watcher, err := config.Watch(ctx, path)
+	updates := make(chan struct{}, 1)
+	watcher, err := config.Watch(ctx, path, updates)
 	if err != nil {
 		return nil, err
 	}
@@ -25,10 +26,26 @@ func New(ctx context.Context, path string) (*proxy.Proxy, error) {
 		return nil, err
 	}
 
-	proxy, err := proxy.New(ctx, cfg.Listen, cfg.Target, injectors)
+	proxy, err := proxy.New(ctx, cfg, injectors)
 	if err != nil {
 		return nil, err
 	}
 
+	go func() {
+		for {
+			select {
+			case <-updates:
+				cfg = watcher.Config()
+				newInjects, err := fault.NewInjectors(cfg.Rules)
+				if err != nil {
+					slog.Error("load config", "err", err)
+					continue
+				}
+				proxy.SetInjects(newInjects)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	return proxy, nil
 }
