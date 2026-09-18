@@ -18,10 +18,54 @@ const (
 
 // Config holds the proxy configuration loaded from a YAML file.
 type Config struct {
-	Listen string `yaml:"listen"`
-	Target string `yaml:"target"`
+	Listen Listen `yaml:"listen"`
+	Target Target `yaml:"target"`
 	Rules  []Rule `yaml:"rules"`
 	Log    Logger `yaml:"logger"`
+}
+
+// Listen describes the side of the proxy that faces gRPC clients.
+type Listen struct {
+	Addr string `yaml:"addr"`
+	// TLS terminates incoming connections. A missing block serves plaintext.
+	TLS *ServerTLS `yaml:"tls"`
+	// MaxRecvMsgSize and MaxSendMsgSize cap message sizes. Zero means the proxy
+	// imposes no limit of its own and leaves the peers to enforce theirs.
+	MaxRecvMsgSize int `yaml:"max_recv_msg_size"`
+	MaxSendMsgSize int `yaml:"max_send_msg_size"`
+}
+
+// Target describes the side of the proxy that faces the upstream gRPC server.
+type Target struct {
+	Addr string `yaml:"addr"`
+	// TLS secures the connection to the target. A missing block dials plaintext.
+	TLS *ClientTLS `yaml:"tls"`
+	// MaxRecvMsgSize and MaxSendMsgSize cap message sizes. Zero means the proxy
+	// imposes no limit of its own and leaves the peers to enforce theirs.
+	MaxRecvMsgSize int `yaml:"max_recv_msg_size"`
+	MaxSendMsgSize int `yaml:"max_send_msg_size"`
+}
+
+// ServerTLS holds the certificate the proxy presents to gRPC clients.
+type ServerTLS struct {
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+// ClientTLS configures how the proxy authenticates the target.
+type ClientTLS struct {
+	// CAFile is the trust anchor used to verify the target certificate. When
+	// empty the system roots are used.
+	CAFile string `yaml:"ca_file"`
+	// ServerName overrides the name checked against the target certificate,
+	// which is needed when the target is dialed by IP.
+	ServerName string `yaml:"server_name"`
+	// InsecureSkipVerify disables verification of the target certificate.
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
+	// CertFile and KeyFile hold the client certificate for targets that
+	// require mutual TLS.
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 // Rule maps a request matcher to a fault that should be injected.
@@ -74,13 +118,50 @@ func Load(path string) (*Config, error) {
 }
 
 func validateConfig(cfg Config) error {
-	if cfg.Listen == "" {
-		return errors.New("config listener is empty")
+	if err := validateListen(cfg.Listen); err != nil {
+		return err
 	}
-	if cfg.Target == "" {
-		return errors.New("config target is empty")
+	if err := validateTarget(cfg.Target); err != nil {
+		return err
 	}
-	for _, r := range cfg.Rules {
+	return validateRules(cfg.Rules)
+}
+
+func validateListen(l Listen) error {
+	if l.Addr == "" {
+		return errors.New("listen address is empty")
+	}
+	if l.MaxRecvMsgSize < 0 || l.MaxSendMsgSize < 0 {
+		return errors.New("listen message size limits must not be negative")
+	}
+	if l.TLS == nil {
+		return nil
+	}
+	if l.TLS.CertFile == "" || l.TLS.KeyFile == "" {
+		return errors.New("listen tls needs both cert_file and key_file")
+	}
+	return nil
+}
+
+func validateTarget(t Target) error {
+	if t.Addr == "" {
+		return errors.New("target address is empty")
+	}
+	if t.MaxRecvMsgSize < 0 || t.MaxSendMsgSize < 0 {
+		return errors.New("target message size limits must not be negative")
+	}
+	if t.TLS == nil {
+		return nil
+	}
+	// A client certificate is optional, but half of one is a mistake.
+	if (t.TLS.CertFile == "") != (t.TLS.KeyFile == "") {
+		return errors.New("target tls needs cert_file and key_file together")
+	}
+	return nil
+}
+
+func validateRules(rules []Rule) error {
+	for _, r := range rules {
 		if r.Fault.Type != TypeDelay && r.Fault.Type != TypeAbort {
 			return errors.New("unsupported fault type: " + r.Fault.Type)
 		}

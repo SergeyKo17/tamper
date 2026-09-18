@@ -17,8 +17,10 @@ func tmpConfigFile(t *testing.T, content string) string {
 
 func TestNew_ValidConfig(t *testing.T) {
 	yaml := `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -38,11 +40,11 @@ rules:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Listen != ":9090" {
-		t.Errorf("listen = %q, want %q", cfg.Listen, ":9090")
+	if cfg.Listen.Addr != ":9090" {
+		t.Errorf("listen = %q, want %q", cfg.Listen.Addr, ":9090")
 	}
-	if cfg.Target != "localhost:50051" {
-		t.Errorf("target = %q, want %q", cfg.Target, "localhost:50051")
+	if cfg.Target.Addr != "localhost:50051" {
+		t.Errorf("target = %q, want %q", cfg.Target.Addr, "localhost:50051")
 	}
 	if len(cfg.Rules) != 2 {
 		t.Fatalf("rules count = %d, want 2", len(cfg.Rules))
@@ -74,7 +76,8 @@ func TestNew_InvalidYAML(t *testing.T) {
 
 func TestNew_EmptyListen(t *testing.T) {
 	yaml := `
-target: "localhost:50051"
+target:
+  addr: "localhost:50051"
 `
 	_, err := Load(tmpConfigFile(t, yaml))
 	if err == nil {
@@ -84,7 +87,8 @@ target: "localhost:50051"
 
 func TestNew_EmptyTarget(t *testing.T) {
 	yaml := `
-listen: ":9090"
+listen:
+  addr: ":9090"
 `
 	_, err := Load(tmpConfigFile(t, yaml))
 	if err == nil {
@@ -94,8 +98,10 @@ listen: ":9090"
 
 func TestNew_UnsupportedFaultType(t *testing.T) {
 	yaml := `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -111,8 +117,10 @@ rules:
 
 func TestNew_ProbabilityOutOfRange(t *testing.T) {
 	yaml := `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -128,8 +136,10 @@ rules:
 
 func TestNew_NegativeProbability(t *testing.T) {
 	yaml := `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -145,8 +155,10 @@ rules:
 
 func TestNew_NoRules(t *testing.T) {
 	yaml := `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 `
 	cfg, err := Load(tmpConfigFile(t, yaml))
 	if err != nil {

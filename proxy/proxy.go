@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"sync/atomic"
 	"time"
 
+	"github.com/SergeyKo17/tamper/config"
 	"github.com/SergeyKo17/tamper/fault"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
@@ -24,25 +27,64 @@ type Proxy struct {
 	injects atomic.Pointer[[]fault.Inject]
 }
 
-// New creates a Proxy that listens on listenAddr and forwards to targetAddr.
-func New(ctx context.Context, listenAddr, targetAddr string, injects []fault.Inject) (*Proxy, error) {
+// New creates a Proxy that listens and forwards as described by cfg.
+func New(ctx context.Context, cfg *config.Config, injects []fault.Inject) (*Proxy, error) {
+	serverCreds, err := serverCredentials(cfg.Listen.TLS)
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg, err := clientTLSConfig(cfg.Target.TLS)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := checkTarget(ctx, cfg.Target.Addr, tlsCfg); err != nil {
+		return nil, err
+	}
+
+	clientCreds := insecure.NewCredentials()
+	if tlsCfg != nil {
+		clientCreds = credentials.NewTLS(tlsCfg)
+	}
+
 	var lc net.ListenConfig
-	lis, err := lc.Listen(ctx, "tcp", listenAddr)
+	lis, err := lc.Listen(ctx, "tcp", cfg.Listen.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("create listener: %w", err)
 	}
 
-	p := Proxy{
-		lis:     lis,
-		injects: injects,
-	}
-	p.server = grpc.NewServer(grpc.UnknownServiceHandler(p.handler))
+	p := Proxy{lis: lis}
+	p.injects.Store(&injects)
+	p.server = grpc.NewServer(
+		grpc.Creds(serverCreds),
+		grpc.UnknownServiceHandler(p.handler),
+		grpc.MaxRecvMsgSize(msgSize(cfg.Listen.MaxRecvMsgSize)),
+		grpc.MaxSendMsgSize(msgSize(cfg.Listen.MaxSendMsgSize)),
+	)
 
-	p.conn, err = grpc.NewClient(targetAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	p.conn, err = grpc.NewClient(cfg.Target.Addr,
+		grpc.WithTransportCredentials(clientCreds),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(msgSize(cfg.Target.MaxRecvMsgSize)),
+			grpc.MaxCallSendMsgSize(msgSize(cfg.Target.MaxSendMsgSize)),
+		),
+	)
 	if err != nil {
+		if cerr := lis.Close(); cerr != nil {
+			slog.Error("listener close", "err", cerr)
+		}
 		return nil, fmt.Errorf("create gRPC client: %w", err)
 	}
 	return &p, nil
+}
+
+// msgSize turns a configured limit into a gRPC option value. Zero means the
+// proxy adds no limit of its own and leaves both peers to enforce theirs.
+func msgSize(limit int) int {
+	if limit <= 0 {
+		return math.MaxInt32
+	}
+	return limit
 }
 
 // Addr returns the listener's network address.

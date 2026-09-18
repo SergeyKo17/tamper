@@ -41,7 +41,11 @@ func startProxy(t *testing.T, echoAddr string, injects []fault.Inject) *Proxy {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	p, err := New(ctx, "127.0.0.1:0", echoAddr, injects)
+	cfg := &config.Config{
+		Listen: config.Listen{Addr: "127.0.0.1:0"},
+		Target: config.Target{Addr: echoAddr},
+	}
+	p, err := New(ctx, cfg, injects)
 	if err != nil {
 		t.Fatal(err)
 	}

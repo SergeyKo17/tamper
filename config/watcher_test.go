@@ -9,8 +9,10 @@ import (
 
 func TestWatch_LoadsInitialConfig(t *testing.T) {
 	path := tmpConfigFile(t, `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -28,8 +30,8 @@ rules:
 	}
 
 	cfg := w.Config()
-	if cfg.Listen != ":9090" {
-		t.Errorf("listen = %q, want %q", cfg.Listen, ":9090")
+	if cfg.Listen.Addr != ":9090" {
+		t.Errorf("listen = %q, want %q", cfg.Listen.Addr, ":9090")
 	}
 	if len(cfg.Rules) != 1 {
 		t.Fatalf("rules count = %d, want 1", len(cfg.Rules))
@@ -38,8 +40,10 @@ rules:
 
 func TestWatch_ReloadsOnFileChange(t *testing.T) {
 	path := tmpConfigFile(t, `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -57,8 +61,10 @@ rules:
 	}
 
 	newYAML := `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 rules:
   - match:
       method: "/pkg.Service/Method"
@@ -96,8 +102,10 @@ rules:
 
 func TestWatch_InvalidFileKeepsOldConfig(t *testing.T) {
 	path := tmpConfigFile(t, `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 `)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -114,8 +122,8 @@ target: "localhost:50051"
 	time.Sleep(500 * time.Millisecond)
 
 	cfg := w.Config()
-	if cfg.Listen != ":9090" {
-		t.Errorf("config should be unchanged, listen = %q", cfg.Listen)
+	if cfg.Listen.Addr != ":9090" {
+		t.Errorf("config should be unchanged, listen = %q", cfg.Listen.Addr)
 	}
 }
 
@@ -129,8 +137,10 @@ func TestWatch_InvalidPath(t *testing.T) {
 
 func TestWatch_CancelStopsWatcher(t *testing.T) {
 	path := tmpConfigFile(t, `
-listen: ":9090"
-target: "localhost:50051"
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
 `)
 	ctx, cancel := context.WithCancel(context.Background())
 
