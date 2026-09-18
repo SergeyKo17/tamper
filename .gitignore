@@ -37,3 +37,6 @@ tamper.yml.bak
 # Editor/IDE
 .idea/
 .vscode/
+
+# Local TLS material
+certs/
