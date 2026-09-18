@@ -16,7 +16,7 @@ type Watcher struct {
 }
 
 // Watch parses the config at path and starts a background goroutine that reloads it on file changes.
-func Watch(ctx context.Context, path string) (*Watcher, error) {
+func Watch(ctx context.Context, path string, update chan<- struct{}) (*Watcher, error) {
 	cfg, err := Load(path)
 	if err != nil {
 		return nil, err
@@ -37,12 +37,12 @@ func Watch(ctx context.Context, path string) (*Watcher, error) {
 		return nil, fmt.Errorf("add watcher path: %w", err)
 	}
 
-	go w.run(ctx, watcher, path)
+	go w.run(ctx, watcher, path, update)
 
 	return &w, nil
 }
 
-func (w *Watcher) run(ctx context.Context, watcher *fsnotify.Watcher, path string) {
+func (w *Watcher) run(ctx context.Context, watcher *fsnotify.Watcher, path string, update chan<- struct{}) {
 	defer func() {
 		if err := watcher.Close(); err != nil {
 			slog.Error("watcher close", "err", err)
@@ -77,6 +77,10 @@ func (w *Watcher) run(ctx context.Context, watcher *fsnotify.Watcher, path strin
 				continue
 			}
 			w.cfg.Store(cfg)
+			select {
+			case update <- struct{}{}:
+			default:
+			}
 		case <-ctx.Done():
 			slog.Info("Watch close by context")
 			return

@@ -30,6 +30,13 @@ go.work.sum
 # Compiled binary
 /tamper
 
+# Runtime config
+tamper.yml
+tamper.yml.bak
+
 # Editor/IDE
 .idea/
 .vscode/
+
+# Local TLS material
+certs/

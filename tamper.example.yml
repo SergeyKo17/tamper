@@ -1,0 +1,48 @@
+# Side facing gRPC clients: tamper is the server here.
+listen:
+  addr: ":9090"
+  # Serve TLS to clients. Without this block the listener is plaintext.
+  # tls:
+  #   cert_file: "certs/tamper-server.crt"
+  #   key_file: "certs/tamper-server.key"
+  #
+  # Message size limits, in bytes. Zero (the default) means tamper imposes
+  # no limit of its own and lets client and target enforce theirs.
+  # max_recv_msg_size: 0
+  # max_send_msg_size: 0
+
+# Side facing the upstream server: tamper is the client here.
+target:
+  addr: "localhost:50051"
+  # Dial the target over TLS. Without this block the connection is plaintext.
+  # tls:
+  #   # Trust anchor for the target certificate; system roots when empty.
+  #   ca_file: "certs/upstream-ca.crt"
+  #   # Name checked against the target certificate, needed when dialing by IP.
+  #   server_name: "api.example.com"
+  #   # Skip that check entirely. Handy for self-signed staging certs, and a
+  #   # hole in the connection's security everywhere else.
+  #   insecure_skip_verify: false
+  #   # Client certificate, only for targets that require mutual TLS.
+  #   cert_file: "certs/tamper-client.crt"
+  #   key_file: "certs/tamper-client.key"
+  # max_recv_msg_size: 0
+  # max_send_msg_size: 0
+
+logger:
+  level: "info"
+
+rules:
+  - match:
+      method: "/pkg.Service/Method"
+    fault:
+      type: delay
+      prob: 0.5
+      duration: 500ms
+  - match:
+      method: "/pkg.Service/Other"
+    fault:
+      type: abort
+      code: 13
+      msg: "injected error"
+      prob: 1.0
