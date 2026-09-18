@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync/atomic"
@@ -11,6 +13,7 @@ import (
 	"github.com/SergeyKo17/tamper/fault"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 // Proxy is a gRPC fault injection proxy.
@@ -71,6 +74,16 @@ func (r *rawBytes) Reset() {}
 // String returns the raw bytes as a string for debugging.
 func (r *rawBytes) String() string { return string(*r) }
 
+// forwardDesc describes every forwarded call as bidirectional streaming.
+// Without a protobuf schema the proxy cannot know a method's real cardinality,
+// and unary, client-streaming and server-streaming calls are all special cases
+// of a bidirectional stream.
+var forwardDesc = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
+
+// hopByHopHeader is advertised per connection, so the value received from the
+// client must not be forwarded: the outgoing connection announces its own.
+const hopByHopHeader = "grpc-accept-encoding"
+
 // handler intercepts all gRPC calls, applies matching fault injectors,
 // and forwards the request to the target server.
 func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
@@ -79,26 +92,94 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 	defer func() {
 		slog.Info("request", "method", method, "duration", time.Since(start), "error", retErr)
 	}()
-	for _, inj := range p.injects {
+
+	injects := p.injects.Load()
+	for _, inj := range *injects {
 		if inj.Match.Method == method {
-			err := inj.Fault.Apply(stream.Context())
-			if err != nil {
+			if err := inj.Fault.Apply(stream.Context()); err != nil {
 				return err
 			}
 		}
 	}
 
-	var reqBody rawBytes
-	if err := stream.RecvMsg(&reqBody); err != nil {
-		return err
-	}
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	md.Delete(hopByHopHeader)
 
-	var respBody rawBytes
-	err := p.conn.Invoke(stream.Context(), method, &reqBody, &respBody)
+	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(stream.Context(), md))
+	defer cancel()
+
+	clientStream, err := grpc.NewClientStream(ctx, forwardDesc, p.conn, method)
 	if err != nil {
 		return err
 	}
-	return stream.SendMsg(&respBody)
+
+	go func() {
+		if err := forwardRequests(stream, clientStream); err != nil {
+			slog.Debug("forward requests", "method", method, "err", err)
+			cancel()
+		}
+	}()
+
+	return forwardResponses(stream, clientStream)
+}
+
+// forwardRequests relays messages from the client to the target and half-closes
+// the target stream once the client stops sending.
+func forwardRequests(stream grpc.ServerStream, clientStream grpc.ClientStream) error {
+	for {
+		var msg rawBytes
+		if err := stream.RecvMsg(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				return clientStream.CloseSend()
+			}
+			return err
+		}
+		if err := clientStream.SendMsg(&msg); err != nil {
+			// The target ended the stream. Its status is reported by
+			// forwardResponses, so stop sending without failing the call.
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+// forwardResponses relays headers, messages and trailers from the target back
+// to the client. It returns when the call is complete.
+func forwardResponses(stream grpc.ServerStream, clientStream grpc.ClientStream) error {
+	// Trailers are only readable once RecvMsg has failed, so they are attached
+	// on the way out. Setting empty metadata is a no-op.
+	defer func() {
+		stream.SetTrailer(clientStream.Trailer())
+	}()
+
+	header, err := clientStream.Header()
+	if err != nil {
+		return err
+	}
+	// Flush headers as soon as the target sends them, so its timing survives
+	// the hop; SetHeader would hold them back until the first message. No
+	// headers means a trailers-only reply, which stays trailers-only only as
+	// long as nothing is sent.
+	if header.Len() > 0 {
+		if err := stream.SendHeader(header); err != nil {
+			return err
+		}
+	}
+
+	for {
+		var msg rawBytes
+		if err := clientStream.RecvMsg(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if err := stream.SendMsg(&msg); err != nil {
+			return err
+		}
+	}
 }
 
 // Run starts the proxy server and blocks until the context is canceled.
