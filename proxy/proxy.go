@@ -104,8 +104,10 @@ type rawBytes []byte
 // Marshal returns the raw bytes as-is, skipping protobuf serialization.
 func (r *rawBytes) Marshal() ([]byte, error) { return *r, nil }
 
-// Unmarshal stores incoming bytes without protobuf deserialization.
-func (r *rawBytes) Unmarshal(b []byte) error { *r = b; return nil }
+// Unmarshal copies incoming bytes without protobuf deserialization. The copy is
+// required: the buffer belongs to a pool that gRPC reclaims as soon as the codec
+// returns, so keeping a reference to it would hand us memory someone else owns.
+func (r *rawBytes) Unmarshal(b []byte) error { *r = append((*r)[:0], b...); return nil }
 
 // ProtoMessage marks rawBytes as a valid proto.Message implementation.
 func (r *rawBytes) ProtoMessage() {}
