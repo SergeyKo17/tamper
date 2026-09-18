@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question about using tamper
+    url: https://github.com/SergeyKo17/tamper/discussions
+    about: Ask here rather than opening an issue.

@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest something tamper should be able to do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. Knowing what you are trying
+        to test makes it much easier to find the right shape for the feature.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >
+        The failure you want to simulate, or the setup that tamper does not fit
+        into today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How do you work around it now?
+      description: Another tool, a patched build, or nothing at all.
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like tamper to do?
+      description: A config sketch is welcome, but a description is enough.
+      render: yaml
+    validations:
+      required: false
