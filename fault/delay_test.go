@@ -10,7 +10,7 @@ import (
 func TestDelay_ApplyTriggered(t *testing.T) {
 	d := NewDelay(100*time.Millisecond, 1.0)
 	start := time.Now()
-	err := d.Apply(context.Background())
+	_, err := d.Apply(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestDelay_ApplyTriggered(t *testing.T) {
 func TestDelay_ApplySkipped(t *testing.T) {
 	d := NewDelay(100*time.Millisecond, 0.0)
 	start := time.Now()
-	err := d.Apply(context.Background())
+	_, err := d.Apply(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestDelay_ApplyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	err := d.Apply(ctx)
+	_, err := d.Apply(ctx)
 	if elapsed := time.Since(start); elapsed >= 50*time.Millisecond {
 		t.Fatalf("expected immediate return on canceled ctx, got %v", elapsed)
 	}

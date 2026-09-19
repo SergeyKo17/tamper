@@ -18,14 +18,14 @@ func NewDelay(duration time.Duration, probability float64) *Delay {
 }
 
 // Apply sleeps for the configured duration based on probability.
-func (d *Delay) Apply(ctx context.Context) error {
+func (d *Delay) Apply(ctx context.Context) (context.Context, error) {
 	if rand.Float64() >= d.probability { //nolint:gosec
-		return nil
+		return ctx, nil
 	}
 	select {
 	case <-time.After(d.duration):
-		return nil
+		return ctx, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return ctx, ctx.Err()
 	}
 }

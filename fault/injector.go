@@ -15,7 +15,7 @@ type Inject struct {
 
 // Injector applies a fault to a gRPC request.
 type Injector interface {
-	Apply(context.Context) error
+	Apply(context.Context) (context.Context, error)
 }
 
 // NewInjectors creates injectors from configuration rules.

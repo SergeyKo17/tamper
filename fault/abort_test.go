@@ -11,7 +11,7 @@ import (
 
 func TestAbort_ApplyTriggered(t *testing.T) {
 	a := NewAbort(14, "unavailable", 1.0)
-	err := a.Apply(context.Background())
+	_, err := a.Apply(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -29,7 +29,7 @@ func TestAbort_ApplyTriggered(t *testing.T) {
 
 func TestAbort_ApplySkipped(t *testing.T) {
 	a := NewAbort(14, "unavailable", 0.0)
-	err := a.Apply(context.Background())
+	_, err := a.Apply(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
@@ -39,7 +39,7 @@ func TestAbort_ApplyCanceledCtx(t *testing.T) {
 	a := NewAbort(14, "unavailable", 1.0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := a.Apply(ctx)
+	_, err := a.Apply(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}

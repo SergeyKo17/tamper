@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -158,5 +159,48 @@ func assertStatus(t *testing.T, err error, want codes.Code, msg string) {
 	}
 	if st.Message() != msg {
 		t.Errorf("expected message %q, got %q", msg, st.Message())
+	}
+}
+
+// addMeta is an injector that only mutates the context: it appends one outgoing
+// header and lets the call through. Its effect is invisible unless the handler
+// carries the returned context forward.
+type addMeta struct {
+	key   string
+	value string
+}
+
+func (a addMeta) Apply(ctx context.Context) (context.Context, error) {
+	return metadata.AppendToOutgoingContext(ctx, a.key, a.value), nil
+}
+
+// TestProxy_ChainThreadsContext checks that the injectors form a chain: each
+// one receives what the previous returned, and all of it reaches the target.
+// Two rules match the same method, so a handler that restarts from the incoming
+// context on every iteration keeps only the last header. The client's own
+// metadata is checked alongside, since a chain built before the outgoing
+// context would drop it.
+func TestProxy_ChainThreadsContext(t *testing.T) {
+	injects := []fault.Inject{
+		{Match: config.Match{Method: "/test/Echo"}, Fault: addMeta{key: "x-first", value: "1"}},
+		{Match: config.Match{Method: "/test/Echo"}, Fault: addMeta{key: "x-second", value: "2"}},
+	}
+	p := startProxy(t, startMetaEcho(t, nil), injects)
+	conn := dialProxy(t, p)
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "bearer test")
+
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{key: "x-first", want: "1"},
+		{key: "x-second", want: "2"},
+		{key: "authorization", want: "bearer test"},
+	}
+	for _, c := range cases {
+		if got := askTarget(t, conn, ctx, c.key); got != c.want {
+			t.Errorf("target saw %s = %q, want %q", c.key, got, c.want)
+		}
 	}
 }
