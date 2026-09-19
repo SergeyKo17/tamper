@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "google.golang.org/grpc/encoding/gzip"
+
 	"github.com/SergeyKo17/tamper/config"
 	"github.com/SergeyKo17/tamper/fault"
 	"google.golang.org/grpc"
@@ -137,19 +139,21 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 		slog.Info("request", "method", method, "duration", time.Since(start), "error", retErr)
 	}()
 
-	injects := p.injects.Load()
-	for _, inj := range *injects {
-		if inj.Match.Method == method {
-			if err := inj.Fault.Apply(stream.Context()); err != nil {
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	md.Delete(hopByHopHeader)
+
+	ctx := metadata.NewOutgoingContext(stream.Context(), md)
+
+	var err error
+	for _, inj := range *p.injects.Load() {
+		if inj.Match.Matches(method) {
+			if ctx, err = inj.Fault.Apply(ctx); err != nil {
 				return err
 			}
 		}
 	}
 
-	md, _ := metadata.FromIncomingContext(stream.Context())
-	md.Delete(hopByHopHeader)
-
-	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(stream.Context(), md))
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	clientStream, err := grpc.NewClientStream(ctx, forwardDesc, p.conn, method)

@@ -21,12 +21,12 @@ func NewAbort(code int, msg string, probability float64) *Abort {
 }
 
 // Apply returns a gRPC status error based on probability.
-func (a *Abort) Apply(ctx context.Context) error {
+func (a *Abort) Apply(ctx context.Context) (context.Context, error) {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return ctx, ctx.Err()
 	}
 	if rand.Float64() >= a.probability { //nolint:gosec
-		return nil
+		return ctx, nil
 	}
-	return status.Error(codes.Code(a.code), a.message) //nolint:gosec
+	return ctx, status.Error(codes.Code(a.code), a.message) //nolint:gosec
 }
