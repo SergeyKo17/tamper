@@ -126,6 +126,25 @@ func TestProxy_Abort(t *testing.T) {
 	assertStatus(t, err, codes.Internal, "injected")
 }
 
+// TestProxy_WildcardRule checks that a pattern, not just an exact method name,
+// selects the calls a rule applies to.
+func TestProxy_WildcardRule(t *testing.T) {
+	injects := []fault.Inject{{
+		Match: config.Match{Method: "/test/*"},
+		Fault: fault.NewAbort(int(codes.Unavailable), "wildcard", 1.0),
+	}}
+	p := startProxy(t, startEcho(t), injects)
+	conn := dialProxy(t, p)
+
+	reqBody := rawBytes([]byte("hello"))
+	var respBody rawBytes
+	err := conn.Invoke(context.Background(), "/test/Echo", &reqBody, &respBody)
+	if err == nil {
+		t.Fatal("expected the wildcard rule to fire, got nil")
+	}
+	assertStatus(t, err, codes.Unavailable, "wildcard")
+}
+
 func TestProxy_SetInjects(t *testing.T) {
 	p := startProxy(t, startEcho(t), nil)
 	conn := dialProxy(t, p)
