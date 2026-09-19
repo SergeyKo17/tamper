@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "google.golang.org/grpc/encoding/gzip"
+
 	"github.com/SergeyKo17/tamper/config"
 	"github.com/SergeyKo17/tamper/fault"
 	"google.golang.org/grpc"
