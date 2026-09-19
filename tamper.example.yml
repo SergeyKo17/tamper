@@ -33,6 +33,10 @@ logger:
   level: "info"
 
 rules:
+  # Patterns follow path.Match: "*" fills one path segment and never crosses a
+  # "/", so "/pkg.Service/*" is the whole service and "/*/Method" is that method
+  # name in any service. A lone "*" matches every call. Rules that match the
+  # same call all fire, in the order written here.
   - match:
       method: "/pkg.Service/Method"
     fault:
@@ -46,3 +50,9 @@ rules:
       code: 13
       msg: "injected error"
       prob: 1.0
+  - match:
+      method: "/pkg.Service/*"
+    fault:
+      type: delay
+      prob: 0.1
+      duration: 50ms

@@ -97,14 +97,23 @@ the upstream to enforce theirs.
 
 | Field | Description |
 |-------|-------------|
-| `match.method` | Full gRPC method path, e.g. `/package.Service/Method` |
+| `match.method` | gRPC method path, exact or with `*` wildcards, e.g. `/package.Service/Method` |
 | `fault.type` | `delay` or `abort` |
 | `fault.duration` | Delay duration, e.g. `200ms`, `1s` (delay only) |
 | `fault.code` | gRPC status code 1–16 (abort only) |
 | `fault.msg` | Error message returned to client (abort only) |
 | `fault.prob` | Probability 0.0–1.0 that the fault fires |
 
+Patterns follow `path.Match`: `*` stands for any run of characters within one
+path segment and never crosses a `/`. So `/myapp.UserService/*` covers a whole
+service, `/*/GetUser` covers one method name across services, and a lone `*`
+covers every call. A pattern is checked when the config loads: one that does
+not start with `/`, or that is malformed, is a configuration error rather than
+a rule that silently never fires.
+
 Every rule whose `match` fits the call is applied, in the order they appear.
+Patterns may overlap, and overlapping rules stack: a `*` rule adding latency
+and a rule aborting one method will both fire on that method.
 
 ## TLS
 

@@ -146,7 +146,7 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 
 	var err error
 	for _, inj := range *p.injects.Load() {
-		if inj.Match.Method == method {
+		if inj.Match.Matches(method) {
 			if ctx, err = inj.Fault.Apply(ctx); err != nil {
 				return err
 			}

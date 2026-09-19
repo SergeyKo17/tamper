@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -114,6 +115,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 
+	if err := validateMatch(cfg.Rules); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
+
 	return &cfg, nil
 }
 
@@ -173,4 +178,33 @@ func validateRules(rules []Rule) error {
 		}
 	}
 	return nil
+}
+
+func validateMatch(rules []Rule) error {
+	for _, r := range rules {
+		switch r.Match.Method {
+		case "*":
+			continue
+		case "":
+			return errors.New("method shouldn't be empty")
+		}
+		if r.Match.Method[0] != byte('/') {
+			return errors.New("pattern should start with /")
+		}
+		if _, err := path.Match(r.Match.Method, ""); err != nil {
+			return fmt.Errorf("match method %q: %w", r.Match.Method, err)
+		}
+	}
+	return nil
+}
+
+// Matches reports whether a gRPC method falls under the rule's pattern. A bare
+// "*" selects everything: path.Match stops its wildcard at the separator, so on
+// its own it would never span a full "/service/method" path.
+func (m *Match) Matches(method string) bool {
+	if m.Method == "*" {
+		return true
+	}
+	ok, err := path.Match(m.Method, method)
+	return err == nil && ok
 }
