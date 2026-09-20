@@ -11,11 +11,13 @@ gRPC fault injection proxy for testing service resilience.
 Client  →  tamper (proxy)  →  Server
                ↓
          fault injection
-         (delay / abort)
+         (delay / abort / truncate / corrupt / drop)
 ```
 
-tamper sits between a gRPC client and server and applies configurable faults —
-delays and aborts — selected by method and probability.
+tamper sits between a gRPC client and server and applies configurable faults,
+selected by method and probability. Faults come at two levels: a call can be
+delayed or aborted outright, and the messages flowing through it can be cut
+short, damaged or swallowed.
 
 It needs no protobuf schemas. Payloads are forwarded as opaque bytes, so any
 service works without regenerating anything, and every call is relayed as a
@@ -23,6 +25,11 @@ bidirectional stream: unary, client-streaming, server-streaming and
 bidirectional methods all pass through unchanged. Request metadata, response
 headers and trailers are forwarded in both directions, so authentication and
 tracing keep working through the proxy.
+
+Message faults work on those same opaque bytes. That is what makes them work
+anywhere without a schema, and it is also their limit: tamper damages a message,
+it does not reach into a field. Aiming a fault at one field needs the protobuf
+schema and is not part of this release.
 
 Faults are reloaded from disk while the proxy runs, without dropping
 connections.
@@ -62,6 +69,14 @@ rules:
       code: 14
       msg: "service unavailable"
       prob: 0.3
+
+  - match:
+      method: "/myapp.UserService/ListUsers"
+    fault:
+      type: corrupt
+      direction: response
+      count: 8
+      prob: 0.2
 ```
 
 Run it and point your client at `127.0.0.1:9090`:
@@ -98,11 +113,18 @@ the upstream to enforce theirs.
 | Field | Description |
 |-------|-------------|
 | `match.method` | gRPC method path, exact or with `*` wildcards, e.g. `/package.Service/Method` |
-| `fault.type` | `delay` or `abort` |
+| `fault.type` | `delay`, `abort`, `truncate`, `corrupt` or `drop` |
+| `fault.prob` | Probability 0.0–1.0 that the fault fires |
 | `fault.duration` | Delay duration, e.g. `200ms`, `1s` (delay only) |
 | `fault.code` | gRPC status code 1–16 (abort only) |
 | `fault.msg` | Error message returned to client (abort only) |
-| `fault.prob` | Probability 0.0–1.0 that the fault fires |
+| `fault.direction` | `request`, `response` or `both` (message faults only, default `request`) |
+| `fault.size` | Bytes to keep (truncate only) |
+| `fault.count` | Bytes to damage (corrupt only, default `1`) |
+
+An unknown key is rejected when the config loads. A typo that is silently
+dropped leaves a rule running on zero values, which is worse than a startup
+error.
 
 Patterns follow `path.Match`: `*` stands for any run of characters within one
 path segment and never crosses a `/`. So `/myapp.UserService/*` covers a whole
@@ -114,6 +136,42 @@ a rule that silently never fires.
 Every rule whose `match` fits the call is applied, in the order they appear.
 Patterns may overlap, and overlapping rules stack: a `*` rule adding latency
 and a rule aborting one method will both fire on that method.
+
+### Message faults
+
+`delay` and `abort` act on the call as a whole, before anything is forwarded.
+`truncate`, `corrupt` and `drop` act on each message in flight, and take a
+`direction`:
+
+| Direction | Applies to |
+|-----------|------------|
+| `request` | Messages on the way to the target (the default) |
+| `response` | Messages on the way back to the client |
+| `both` | Messages on either leg |
+
+A `direction` on `delay` or `abort` is a configuration error: those faults have
+no leg to run on.
+
+**`truncate`** keeps the first `size` bytes and throws the rest away. This is
+what a receiver sees when a connection dies mid-message: the gRPC frame arrives
+intact and announces the shorter length, and the payload inside it does not
+parse. A message already at or below `size` passes through untouched — the fault
+cuts messages down, it never pads them out.
+
+**`corrupt`** damages `count` bytes chosen at random, leaving the length alone.
+Decoding such a message usually fails outright; when it does not, a field
+quietly carries a different value, which is the more interesting case to test.
+Because the bytes are opaque, which field is hit is not something you choose.
+
+**`drop`** discards a message instead of relaying it. Neither side is told: the
+call stays healthy and the stream simply has a hole in it. On a streaming
+method that is exactly a lost message. On a unary call it leaves the caller
+waiting for an answer that never comes, until its own deadline fires — so give
+unary methods a deadline before pointing `drop` at them.
+
+Rules stack here too, in the order written: a `truncate` followed by a `corrupt`
+damages what is left after the cut. A `drop` ends the chain, since a message
+that will not be sent has nothing left to change.
 
 ## TLS
 
@@ -188,6 +246,7 @@ JSON to stdout on every request:
 - **Load balancer validation** — place tamper in front of one backend and check that the balancer retries, fails over, or shifts traffic to healthy instances
 - **Timeout tuning** — inject delays to find the right timeout values before they bite in production
 - **Chaos engineering** — controlled fault injection in staging environments
+- **Malformed input handling** — truncate or corrupt payloads and check that deserialization failures are caught, logged and reported rather than crashing a handler
 
 ## Contributing
 

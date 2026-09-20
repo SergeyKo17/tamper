@@ -37,12 +37,27 @@ rules:
   # "/", so "/pkg.Service/*" is the whole service and "/*/Method" is that method
   # name in any service. A lone "*" matches every call. Rules that match the
   # same call all fire, in the order written here.
+  #
+  # Unknown keys are rejected: a typo is a broken rule, not a default.
+  #
+  # Faults come in two kinds. Call-level faults (delay, abort) act on the call
+  # as a whole, before anything is forwarded. Message-level faults (truncate,
+  # corrupt, drop) act on each message in flight, and take a direction:
+  #   request   on the way to the target (the default)
+  #   response  on the way back to the client
+  #   both      on either leg
+  # A direction on a call-level fault is an error.
+
+  # Hold the call back before forwarding it.
   - match:
       method: "/pkg.Service/Method"
     fault:
       type: delay
       prob: 0.5
       duration: 500ms
+
+  # Answer with a gRPC status instead of reaching the target at all. The code
+  # is the numeric gRPC code: 13 is Internal, 14 Unavailable.
   - match:
       method: "/pkg.Service/Other"
     fault:
@@ -50,6 +65,41 @@ rules:
       code: 13
       msg: "injected error"
       prob: 1.0
+
+  # Cut every request down to size bytes, which is what a receiver sees when a
+  # connection dies mid-message: the frame arrives intact and the payload
+  # inside it does not parse. A message already that short is left alone --
+  # truncate never pads a message out to size.
+  - match:
+      method: "/pkg.Service/Upload"
+    fault:
+      type: truncate
+      prob: 1.0
+      direction: request
+      size: 16
+
+  # Damage count bytes of every answer, chosen at random, leaving the length
+  # untouched. Decoding usually fails outright; when it does not, a field
+  # quietly carries a different value. count defaults to 1.
+  - match:
+      method: "/pkg.Service/Fetch"
+    fault:
+      type: corrupt
+      prob: 0.2
+      direction: response
+      count: 4
+
+  # Swallow one message in ten, in either direction. Neither side is told:
+  # the call stays healthy and the stream simply has a hole in it. On a unary
+  # call a dropped message leaves the caller without an answer.
+  - match:
+      method: "/pkg.Service/Stream"
+    fault:
+      type: drop
+      prob: 0.1
+      direction: both
+
+  # Anything under this service, with a small delay.
   - match:
       method: "/pkg.Service/*"
     fault:
