@@ -7,7 +7,7 @@ import (
 
 func TestTruncate_MutateTriggered(t *testing.T) {
 	msg := []byte("0123456789")
-	tr := NewTruncate(4, 1.0)
+	tr := NewTruncate(4)
 	out, forward, err := tr.Mutate(msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -20,23 +20,11 @@ func TestTruncate_MutateTriggered(t *testing.T) {
 	}
 }
 
-func TestTruncate_MutateSkipped(t *testing.T) {
-	msg := []byte("0123456789")
-	tr := NewTruncate(4, 0.0)
-	out, _, err := tr.Mutate(msg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !bytes.Equal(out, msg) {
-		t.Fatalf("expected the message untouched, got %q", out)
-	}
-}
-
 // A message already short enough is passed on as it is: the fault cuts messages
 // down, it never pads them out to size.
 func TestTruncate_MutateShorterThanSize(t *testing.T) {
 	msg := []byte("012")
-	tr := NewTruncate(8, 1.0)
+	tr := NewTruncate(8)
 	out, forward, err := tr.Mutate(msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -51,7 +39,7 @@ func TestTruncate_MutateShorterThanSize(t *testing.T) {
 
 func TestTruncate_MutateExactlySize(t *testing.T) {
 	msg := []byte("0123")
-	tr := NewTruncate(4, 1.0)
+	tr := NewTruncate(4)
 	out, _, err := tr.Mutate(msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -64,7 +52,7 @@ func TestTruncate_MutateExactlySize(t *testing.T) {
 // Truncating to nothing still forwards: an empty message on the wire is a
 // different fault from no message at all, which is what Drop does.
 func TestTruncate_MutateToEmpty(t *testing.T) {
-	tr := NewTruncate(0, 1.0)
+	tr := NewTruncate(0)
 	out, forward, err := tr.Mutate([]byte("0123456789"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,7 +69,7 @@ func TestTruncate_MutateToEmpty(t *testing.T) {
 // cut-off tail stays in the backing array and must stay out of reach.
 func TestTruncate_MutateDoesNotExposeTail(t *testing.T) {
 	msg := []byte("0123456789")
-	tr := NewTruncate(4, 1.0)
+	tr := NewTruncate(4)
 	out, _, err := tr.Mutate(msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

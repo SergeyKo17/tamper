@@ -48,10 +48,13 @@ rules:
   #   both      on either leg
   # A direction on a call-level fault is an error.
 
-  # Hold the call back before forwarding it.
+  # Hold the call back before forwarding it. The name is optional and shows up
+  # in the logs; without one the rule is reported as its type and position,
+  # such as "delay-0".
   - match:
       method: "/pkg.Service/Method"
     fault:
+      name: "slow-method"
       type: delay
       prob: 0.5
       duration: 500ms
@@ -84,6 +87,7 @@ rules:
   - match:
       method: "/pkg.Service/Fetch"
     fault:
+      name: "damage-fetch"
       type: corrupt
       prob: 0.2
       direction: response

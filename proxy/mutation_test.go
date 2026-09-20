@@ -1,10 +1,14 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,9 +66,10 @@ func call(t *testing.T, conn *grpc.ClientConn, body string) string {
 // untouched: the target reports the short length it received.
 func TestProxy_TruncateRequest(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionRequest,
-		Mutator:   fault.NewTruncate(6, 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(6),
 	})
 	p := startProxy(t, startReportEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -78,9 +83,10 @@ func TestProxy_TruncateRequest(t *testing.T) {
 // answer is cut on the way back.
 func TestProxy_TruncateResponse(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionResponse,
-		Mutator:   fault.NewTruncate(6, 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionResponse,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(6),
 	})
 	p := startProxy(t, startReportEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -95,9 +101,10 @@ func TestProxy_TruncateResponse(t *testing.T) {
 // pass by accident on a rule that fired on one leg only.
 func TestProxy_TruncateBoth(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionBoth,
-		Mutator:   fault.NewTruncate(6, 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionBoth,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(6),
 	})
 	p := startProxy(t, startReportEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -111,9 +118,10 @@ func TestProxy_TruncateBoth(t *testing.T) {
 // that was sent, and its length is the same.
 func TestProxy_CorruptRequest(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionRequest,
-		Mutator:   fault.NewCorrupt(1, 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewCorrupt(1),
 	})
 	p := startProxy(t, startEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -131,9 +139,10 @@ func TestProxy_CorruptRequest(t *testing.T) {
 // A rule whose pattern does not cover the method leaves the call alone.
 func TestProxy_MessageRuleNotMatched(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/other/*"},
-		Direction: config.DirectionRequest,
-		Mutator:   fault.NewTruncate(2, 1.0),
+		Match:       config.Match{Method: "/other/*"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(2),
 	})
 	p := startProxy(t, startEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -146,9 +155,10 @@ func TestProxy_MessageRuleNotMatched(t *testing.T) {
 // Patterns select message rules the same way they select call rules.
 func TestProxy_MessageWildcard(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/*"},
-		Direction: config.DirectionRequest,
-		Mutator:   fault.NewTruncate(2, 1.0),
+		Match:       config.Match{Method: "/test/*"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(2),
 	})
 	p := startProxy(t, startEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -163,9 +173,10 @@ func TestProxy_MessageWildcard(t *testing.T) {
 // error, so reaching the comparison means the call itself stayed healthy.
 func TestProxy_DropLeavesHoleInStream(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionRequest,
-		Mutator:   fault.NewDrop(1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewDrop(),
 	})
 	p := startProxy(t, startStreamEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -181,8 +192,10 @@ func TestProxy_DropLeavesHoleInStream(t *testing.T) {
 func TestProxy_MutatorChainOrder(t *testing.T) {
 	match := config.Match{Method: "/test/Echo"}
 	injects := messageInjects(
-		fault.MessageInject{Match: match, Direction: config.DirectionRequest, Mutator: fault.NewTruncate(4, 1.0)},
-		fault.MessageInject{Match: match, Direction: config.DirectionRequest, Mutator: fault.NewCorrupt(1, 1.0)},
+		fault.MessageInject{Match: match, Direction: config.DirectionRequest,
+			Probability: 1.0, Mutator: fault.NewTruncate(4)},
+		fault.MessageInject{Match: match, Direction: config.DirectionRequest,
+			Probability: 1.0, Mutator: fault.NewCorrupt(1)},
 	)
 	p := startProxy(t, startEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -212,8 +225,10 @@ func TestProxy_DropStopsChain(t *testing.T) {
 	match := config.Match{Method: "/test/Echo"}
 	spy := &spyMutator{}
 	injects := messageInjects(
-		fault.MessageInject{Match: match, Direction: config.DirectionRequest, Mutator: fault.NewDrop(1.0)},
-		fault.MessageInject{Match: match, Direction: config.DirectionRequest, Mutator: spy},
+		fault.MessageInject{Match: match, Direction: config.DirectionRequest,
+			Probability: 1.0, Mutator: fault.NewDrop()},
+		fault.MessageInject{Match: match, Direction: config.DirectionRequest,
+			Probability: 1.0, Mutator: spy},
 	)
 	p := startProxy(t, startStreamEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -234,9 +249,10 @@ func (errMutator) Mutate([]byte) ([]byte, bool, error) { return nil, false, erro
 // actually went wrong instead.
 func TestProxy_RequestMutatorErrorReachesClient(t *testing.T) {
 	injects := messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionRequest,
-		Mutator:   errMutator{},
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     errMutator{},
 	})
 	p := startProxy(t, startEcho(t), injects)
 	conn := dialProxy(t, p)
@@ -255,9 +271,11 @@ func TestProxy_RequestMutatorErrorReachesClient(t *testing.T) {
 func TestProxy_CallAndMessageFault(t *testing.T) {
 	match := config.Match{Method: "/test/Echo"}
 	injects := &fault.Injects{
-		Call: []fault.Inject{{Match: match, Fault: fault.NewDelay(100*time.Millisecond, 1.0)}},
+		Call: []fault.Inject{{Match: match, Probability: 1.0,
+			Fault: fault.NewDelay(100 * time.Millisecond)}},
 		Message: []fault.MessageInject{
-			{Match: match, Direction: config.DirectionRequest, Mutator: fault.NewTruncate(2, 1.0)},
+			{Match: match, Direction: config.DirectionRequest,
+				Probability: 1.0, Mutator: fault.NewTruncate(2)},
 		},
 	}
 	p := startProxy(t, startEcho(t), injects)
@@ -283,9 +301,10 @@ func TestProxy_SetInjectsMessage(t *testing.T) {
 	}
 
 	p.SetInjects(messageInjects(fault.MessageInject{
-		Match:     config.Match{Method: "/test/Echo"},
-		Direction: config.DirectionRequest,
-		Mutator:   fault.NewTruncate(2, 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(2),
 	}))
 
 	if got := call(t, conn, "hello"); got != "he" {
@@ -298,21 +317,117 @@ func TestProxy_SetInjectsMessage(t *testing.T) {
 // quietly reduce both to request.
 func TestSelectMutators(t *testing.T) {
 	match := config.Match{Method: "/test/Echo"}
-	onRequest := fault.NewTruncate(1, 1.0)
-	onResponse := fault.NewTruncate(2, 1.0)
-	onBoth := fault.NewTruncate(3, 1.0)
-
-	req, resp := selectMutators([]fault.MessageInject{
-		{Match: match, Direction: config.DirectionRequest, Mutator: onRequest},
-		{Match: match, Direction: config.DirectionResponse, Mutator: onResponse},
-		{Match: match, Direction: config.DirectionBoth, Mutator: onBoth},
-		{Match: config.Match{Method: "/other/Call"}, Direction: config.DirectionBoth, Mutator: fault.NewDrop(1.0)},
-	}, "/test/Echo")
-
-	if len(req) != 2 || req[0] != fault.Mutator(onRequest) || req[1] != fault.Mutator(onBoth) {
-		t.Errorf("expected the request leg to hold the request and both rules, got %v", req)
+	rules := []fault.MessageInject{
+		{Match: match, Name: "on-request", Direction: config.DirectionRequest, Mutator: fault.NewDrop()},
+		{Match: match, Name: "on-response", Direction: config.DirectionResponse, Mutator: fault.NewDrop()},
+		{Match: match, Name: "on-both", Direction: config.DirectionBoth, Mutator: fault.NewDrop()},
+		{Match: config.Match{Method: "/other/Call"}, Name: "elsewhere", Direction: config.DirectionBoth, Mutator: fault.NewDrop()},
 	}
-	if len(resp) != 2 || resp[0] != fault.Mutator(onResponse) || resp[1] != fault.Mutator(onBoth) {
-		t.Errorf("expected the response leg to hold the response and both rules, got %v", resp)
+
+	req, resp := selectMutators(rules, "/test/Echo")
+
+	if got := names(req); got != "on-request,on-both" {
+		t.Errorf("request leg = %s, want on-request,on-both", got)
+	}
+	if got := names(resp); got != "on-response,on-both" {
+		t.Errorf("response leg = %s, want on-response,on-both", got)
+	}
+}
+
+// names lists the rules of one leg in the order they will run.
+func names(rules []fault.MessageInject) string {
+	out := make([]string, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, r.Name)
+	}
+	return strings.Join(out, ",")
+}
+
+// The dice are rolled by the proxy now, so a rule at zero has to be selected
+// and then skipped on every message rather than never selected at all.
+func TestProxy_ZeroProbabilityNeverFires(t *testing.T) {
+	injects := messageInjects(fault.MessageInject{
+		Match:       config.Match{Method: "/test/Echo"},
+		Name:        "never",
+		Direction:   config.DirectionRequest,
+		Probability: 0,
+		Mutator:     fault.NewTruncate(2),
+	})
+	p := startProxy(t, startEcho(t), injects)
+	conn := dialProxy(t, p)
+
+	if got := call(t, conn, "hello"); got != "hello" {
+		t.Fatalf("expected the body untouched, got %q", got)
+	}
+}
+
+// captureLogs points the default logger at a buffer for the duration of one
+// test. Both legs write to it from their own goroutines, hence the lock.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func captureLogs(t *testing.T) *logBuffer {
+	t.Helper()
+	var b logBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&b, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &b
+}
+
+// What a leg did is reported once, when it is done, rather than once per
+// message: a stream of three carries one line saying the rule fired three
+// times.
+func TestProxy_LogsFiredRules(t *testing.T) {
+	logs := captureLogs(t)
+	injects := messageInjects(fault.MessageInject{
+		Match:       config.Match{Method: "/test/Echo"},
+		Name:        "cut-me",
+		Direction:   config.DirectionRequest,
+		Probability: 1.0,
+		Mutator:     fault.NewTruncate(2),
+	})
+	p := startProxy(t, startStreamEcho(t), injects)
+	conn := dialProxy(t, p)
+
+	echoStream(t, conn, [][]byte{[]byte("one"), []byte("two"), []byte("three")})
+
+	out := logs.String()
+	if !strings.Contains(out, `"msg":"mutations"`) {
+		t.Fatalf("expected a mutations line, got:\n%s", out)
+	}
+	if !strings.Contains(out, `"cut-me":3`) {
+		t.Errorf("expected the rule to be reported as fired 3 times, got:\n%s", out)
+	}
+	if strings.Count(out, `"msg":"mutations"`) != 1 {
+		t.Errorf("expected one line for the one leg carrying rules, got:\n%s", out)
+	}
+}
+
+// A call the rules do not touch says nothing: two empty lines per call would
+// bury the line that matters.
+func TestProxy_QuietWithoutRules(t *testing.T) {
+	logs := captureLogs(t)
+	p := startProxy(t, startEcho(t), nil)
+	conn := dialProxy(t, p)
+
+	call(t, conn, "hello")
+
+	if out := logs.String(); strings.Contains(out, `"msg":"mutations"`) {
+		t.Errorf("expected no mutations line, got:\n%s", out)
 	}
 }

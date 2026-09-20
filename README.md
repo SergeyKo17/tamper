@@ -113,6 +113,7 @@ the upstream to enforce theirs.
 | Field | Description |
 |-------|-------------|
 | `match.method` | gRPC method path, exact or with `*` wildcards, e.g. `/package.Service/Method` |
+| `fault.name` | Name the rule is reported under in the logs; defaults to its type and position, e.g. `corrupt-2` |
 | `fault.type` | `delay`, `abort`, `truncate`, `corrupt` or `drop` |
 | `fault.prob` | Probability 0.0–1.0 that the fault fires |
 | `fault.duration` | Delay duration, e.g. `200ms`, `1s` (delay only) |
@@ -237,8 +238,23 @@ only the name is wrong, and `ca_file` when the target uses a private CA.
 JSON to stdout on every request:
 
 ```json
-{"time":"2026-09-17T14:38:43","level":"INFO","msg":"request","method":"/myapp.UserService/GetUser","duration":"203.1ms","error":null}
+{"time":"2026-09-17T14:38:43","level":"INFO","msg":"request","call":42,"method":"/myapp.UserService/GetUser","duration":"203.1ms","error":null}
 ```
+
+`call` numbers the calls passing through, so the lines one call leaves behind
+can be told apart from those of the calls running beside it.
+
+At `debug` level every rule that fires is reported as well. A call-level fault
+is reported as it happens; message faults are counted and reported once per
+leg, when that leg is done, since a stream can carry thousands of messages:
+
+```json
+{"level":"DEBUG","msg":"fault applied","call":42,"method":"/myapp.UserService/GetUser","rule":"slow-getuser"}
+{"level":"DEBUG","msg":"mutations","call":42,"direction":"response","messages":100,"rules":{"corrupt-2":21}}
+```
+
+`messages` is how many passed through that leg, `rules` how many times each rule
+fired on them. A leg no rule covers stays silent.
 
 ## Use cases
 
