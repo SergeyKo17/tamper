@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"time"
@@ -156,7 +157,21 @@ func validateConfig(cfg Config) error {
 	if err := validateTarget(cfg.Target); err != nil {
 		return err
 	}
+	if err := validateLogger(cfg.Log); err != nil {
+		return err
+	}
 	return validateRules(cfg.Rules)
+}
+
+// validateLogger checks that the level is one slog understands. A level it does
+// not recognise would leave the proxy running at info while the config says
+// otherwise, and a missing debug line is a bad way to learn about a typo.
+func validateLogger(l Logger) error {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(l.Level)); err != nil {
+		return fmt.Errorf("logger level %q: %w", l.Level, err)
+	}
+	return nil
 }
 
 func validateListen(l Listen) error {
