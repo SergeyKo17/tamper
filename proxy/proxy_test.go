@@ -53,7 +53,7 @@ func startProxyWithConfig(t *testing.T, cfg *config.Config, injects []fault.Inje
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	p, err := New(ctx, cfg, injects)
+	p, err := New(ctx, cfg, &fault.Injects{Call: injects})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,10 +155,10 @@ func TestProxy_SetInjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p.SetInjects([]fault.Inject{{
+	p.SetInjects(&fault.Injects{Call: []fault.Inject{{
 		Match: config.Match{Method: "/test/Echo"},
 		Fault: fault.NewAbort(int(codes.Internal), "dynamic", 1.0),
-	}})
+	}}})
 
 	err := conn.Invoke(context.Background(), "/test/Echo", &reqBody, &respBody)
 	if err == nil {

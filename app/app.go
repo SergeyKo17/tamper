@@ -21,7 +21,7 @@ func New(ctx context.Context, path string) (*proxy.Proxy, error) {
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	injectors, err := fault.NewInjectors(cfg.Rules)
+	injectors, err := fault.New(cfg.Rules)
 	if err != nil {
 		return nil, err
 	}
@@ -36,12 +36,16 @@ func New(ctx context.Context, path string) (*proxy.Proxy, error) {
 			select {
 			case <-updates:
 				cfg = watcher.Config()
-				newInjects, err := fault.NewInjectors(cfg.Rules)
+				newInjects, err := fault.New(cfg.Rules)
 				if err != nil {
 					slog.Error("load config", "err", err)
 					continue
 				}
-				proxy.SetInjects(newInjects)
+				if newInjects == nil {
+					proxy.SetInjects(&fault.Injects{})
+				} else {
+					proxy.SetInjects(newInjects)
+				}
 			case <-ctx.Done():
 				return
 			}
