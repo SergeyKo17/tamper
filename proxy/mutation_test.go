@@ -416,6 +416,11 @@ func TestProxy_LogsFiredRules(t *testing.T) {
 	if strings.Count(out, `"msg":"mutations"`) != 1 {
 		t.Errorf("expected one line for the one leg carrying rules, got:\n%s", out)
 	}
+	// slog renders a raw time.Duration as a nanosecond count, which is not what
+	// the logs are meant to read like.
+	if !strings.Contains(out, `"duration":"`) {
+		t.Errorf("expected the duration to be logged as a readable string, got:\n%s", out)
+	}
 }
 
 // A call the rules do not touch says nothing: two empty lines per call would

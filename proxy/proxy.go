@@ -151,7 +151,7 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 	method, _ := grpc.Method(stream.Context())
 	log := slog.With("call", p.calls.Add(1))
 	defer func() {
-		log.Info("request", "method", method, "duration", time.Since(start), "error", retErr)
+		log.Info("request", "method", method, "duration", time.Since(start).String(), "error", retErr)
 	}()
 
 	md, _ := metadata.FromIncomingContext(stream.Context())
