@@ -41,7 +41,7 @@ func startEcho(t *testing.T) string {
 	return lis.Addr().String()
 }
 
-func startProxy(t *testing.T, echoAddr string, injects []fault.Inject) *Proxy {
+func startProxy(t *testing.T, echoAddr string, injects *fault.Injects) *Proxy {
 	t.Helper()
 	return startProxyWithConfig(t, &config.Config{
 		Listen: config.Listen{Addr: "127.0.0.1:0"},
@@ -49,7 +49,7 @@ func startProxy(t *testing.T, echoAddr string, injects []fault.Inject) *Proxy {
 	}, injects)
 }
 
-func startProxyWithConfig(t *testing.T, cfg *config.Config, injects []fault.Inject) *Proxy {
+func startProxyWithConfig(t *testing.T, cfg *config.Config, injects *fault.Injects) *Proxy {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -89,10 +89,11 @@ func TestProxy_Passthrough(t *testing.T) {
 
 func TestProxy_Delay(t *testing.T) {
 	injects := []fault.Inject{{
-		Match: config.Match{Method: "/test/Echo"},
-		Fault: fault.NewDelay(100*time.Millisecond, 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Probability: 1.0,
+		Fault:       fault.NewDelay(100 * time.Millisecond),
 	}}
-	p := startProxy(t, startEcho(t), injects)
+	p := startProxy(t, startEcho(t), &fault.Injects{Call: injects})
 	conn := dialProxy(t, p)
 
 	start := time.Now()
@@ -111,10 +112,11 @@ func TestProxy_Delay(t *testing.T) {
 
 func TestProxy_Abort(t *testing.T) {
 	injects := []fault.Inject{{
-		Match: config.Match{Method: "/test/Echo"},
-		Fault: fault.NewAbort(int(codes.Internal), "injected", 1.0),
+		Match:       config.Match{Method: "/test/Echo"},
+		Probability: 1.0,
+		Fault:       fault.NewAbort(int(codes.Internal), "injected"),
 	}}
-	p := startProxy(t, startEcho(t), injects)
+	p := startProxy(t, startEcho(t), &fault.Injects{Call: injects})
 	conn := dialProxy(t, p)
 
 	reqBody := rawBytes([]byte("hello"))
@@ -130,10 +132,11 @@ func TestProxy_Abort(t *testing.T) {
 // selects the calls a rule applies to.
 func TestProxy_WildcardRule(t *testing.T) {
 	injects := []fault.Inject{{
-		Match: config.Match{Method: "/test/*"},
-		Fault: fault.NewAbort(int(codes.Unavailable), "wildcard", 1.0),
+		Match:       config.Match{Method: "/test/*"},
+		Probability: 1.0,
+		Fault:       fault.NewAbort(int(codes.Unavailable), "wildcard"),
 	}}
-	p := startProxy(t, startEcho(t), injects)
+	p := startProxy(t, startEcho(t), &fault.Injects{Call: injects})
 	conn := dialProxy(t, p)
 
 	reqBody := rawBytes([]byte("hello"))
@@ -155,10 +158,11 @@ func TestProxy_SetInjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p.SetInjects([]fault.Inject{{
-		Match: config.Match{Method: "/test/Echo"},
-		Fault: fault.NewAbort(int(codes.Internal), "dynamic", 1.0),
-	}})
+	p.SetInjects(&fault.Injects{Call: []fault.Inject{{
+		Match:       config.Match{Method: "/test/Echo"},
+		Probability: 1.0,
+		Fault:       fault.NewAbort(int(codes.Internal), "dynamic"),
+	}}})
 
 	err := conn.Invoke(context.Background(), "/test/Echo", &reqBody, &respBody)
 	if err == nil {
@@ -201,10 +205,12 @@ func (a addMeta) Apply(ctx context.Context) (context.Context, error) {
 // context would drop it.
 func TestProxy_ChainThreadsContext(t *testing.T) {
 	injects := []fault.Inject{
-		{Match: config.Match{Method: "/test/Echo"}, Fault: addMeta{key: "x-first", value: "1"}},
-		{Match: config.Match{Method: "/test/Echo"}, Fault: addMeta{key: "x-second", value: "2"}},
+		{Match: config.Match{Method: "/test/Echo"}, Probability: 1.0,
+			Fault: addMeta{key: "x-first", value: "1"}},
+		{Match: config.Match{Method: "/test/Echo"}, Probability: 1.0,
+			Fault: addMeta{key: "x-second", value: "2"}},
 	}
-	p := startProxy(t, startMetaEcho(t, nil), injects)
+	p := startProxy(t, startMetaEcho(t, nil), &fault.Injects{Call: injects})
 	conn := dialProxy(t, p)
 
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "bearer test")

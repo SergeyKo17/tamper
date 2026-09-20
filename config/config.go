@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"time"
@@ -15,6 +17,20 @@ const (
 	TypeDelay = "delay"
 	// TypeAbort is a fault that immediately returns a gRPC error.
 	TypeAbort = "abort"
+
+	// TypeTruncate is a fault that cuts a message down to Size bytes.
+	TypeTruncate = "truncate"
+	// TypeCorrupt is a fault that flips Count bytes of a message.
+	TypeCorrupt = "corrupt"
+	// TypeDrop is a fault that discards a message instead of relaying it.
+	TypeDrop = "drop"
+
+	// DirectionRequest applies a message fault on the way to the target.
+	DirectionRequest = "request"
+	// DirectionResponse applies a message fault on the way back to the client.
+	DirectionResponse = "response"
+	// DirectionBoth applies a message fault in both directions.
+	DirectionBoth = "both"
 )
 
 // Config holds the proxy configuration loaded from a YAML file.
@@ -82,11 +98,15 @@ type Match struct {
 
 // Fault describes the failure to inject: its type, probability, and parameters.
 type Fault struct {
+	Name        string        `yaml:"name"`
 	Type        string        `yaml:"type"`
+	Probability float64       `yaml:"prob"`
+	Direction   string        `yaml:"direction"`
+	Duration    time.Duration `yaml:"duration"`
 	Code        int           `yaml:"code"`
 	Message     string        `yaml:"msg"`
-	Probability float64       `yaml:"prob"`
-	Duration    time.Duration `yaml:"duration"`
+	Size        int           `yaml:"size"`
+	Count       int           `yaml:"count"`
 }
 
 // Logger holds logger configs.
@@ -103,12 +123,20 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(configFile, &cfg); err != nil {
+	// Strict decoding: an unknown key is a typo, and a typo that is silently
+	// dropped leaves a rule running on zero values.
+	dec := yaml.NewDecoder(bytes.NewReader(configFile))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
+	}
+
+	for i := range cfg.Rules {
+		applyFaultDefaults(&cfg.Rules[i].Fault)
 	}
 
 	if err := validateConfig(cfg); err != nil {
@@ -129,7 +157,21 @@ func validateConfig(cfg Config) error {
 	if err := validateTarget(cfg.Target); err != nil {
 		return err
 	}
+	if err := validateLogger(cfg.Log); err != nil {
+		return err
+	}
 	return validateRules(cfg.Rules)
+}
+
+// validateLogger checks that the level is one slog understands. A level it does
+// not recognise would leave the proxy running at info while the config says
+// otherwise, and a missing debug line is a bad way to learn about a typo.
+func validateLogger(l Logger) error {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(l.Level)); err != nil {
+		return fmt.Errorf("logger level %q: %w", l.Level, err)
+	}
+	return nil
 }
 
 func validateListen(l Listen) error {
@@ -167,17 +209,105 @@ func validateTarget(t Target) error {
 
 func validateRules(rules []Rule) error {
 	for _, r := range rules {
-		if r.Fault.Type != TypeDelay && r.Fault.Type != TypeAbort {
-			return errors.New("unsupported fault type: " + r.Fault.Type)
-		}
-		if r.Fault.Probability < 0 || r.Fault.Probability > 1 {
-			return fmt.Errorf("fault probability must be between 0 and 1, got: %f", r.Fault.Probability)
-		}
-		if r.Fault.Type == TypeAbort && (r.Fault.Code < 1 || r.Fault.Code > 16) {
-			return fmt.Errorf("fault code must be between 1 and 16, got: %d", r.Fault.Code)
+		if err := validateFault(r.Fault); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateFault(f Fault) error {
+	if !isKnownFault(f.Type) {
+		return errors.New("unsupported fault type: " + f.Type)
+	}
+	if f.Probability < 0 || f.Probability > 1 {
+		return fmt.Errorf("fault probability must be between 0 and 1, got: %f", f.Probability)
+	}
+	if err := validateDirection(f); err != nil {
+		return err
+	}
+	return validateFaultParams(f)
+}
+
+// validateFaultParams checks the settings a fault type carries of its own: a
+// delay has a duration, an abort a status code, and a message fault a size or
+// a count. Mixing up size and count is rejected rather than defaulted, since
+// the rule would otherwise work on a different amount than it says.
+func validateFaultParams(f Fault) error {
+	switch f.Type {
+	case TypeDelay:
+		if f.Duration <= 0 {
+			return fmt.Errorf("delay duration must be positive, got: %s", f.Duration)
+		}
+	case TypeAbort:
+		if f.Code < 1 || f.Code > 16 {
+			return fmt.Errorf("fault code must be between 1 and 16, got: %d", f.Code)
+		}
+	case TypeTruncate:
+		if f.Size <= 0 {
+			return fmt.Errorf("truncate size must be positive, got: %d", f.Size)
+		}
+		if f.Count != 0 {
+			return errors.New("truncate is sized in bytes by size, not count")
+		}
+	case TypeCorrupt:
+		if f.Count <= 0 {
+			return fmt.Errorf("corrupt count must be positive, got: %d", f.Count)
+		}
+		if f.Size != 0 {
+			return errors.New("corrupt is measured by count, not size")
+		}
+	}
+	return nil
+}
+
+// validateDirection checks that a direction is set exactly where it means
+// something. A message fault picks the leg it works on; a call-level fault acts
+// before the request is forwarded and has no leg to pick.
+func validateDirection(f Fault) error {
+	if !IsMessageFault(f.Type) {
+		if f.Direction != "" {
+			return fmt.Errorf("fault type %q takes no direction", f.Type)
+		}
+		return nil
+	}
+
+	switch f.Direction {
+	case DirectionRequest, DirectionResponse, DirectionBoth:
+		return nil
+	default:
+		return fmt.Errorf("direction must be %s, %s or %s, got: %q",
+			DirectionRequest, DirectionResponse, DirectionBoth, f.Direction)
+	}
+}
+
+// applyFaultDefaults fills in what a message fault may leave unsaid: the leg it
+// works on, and how many bytes it deals with. A zero count would turn the rule
+// into a silent no-op, which is worse than a chosen default.
+func applyFaultDefaults(f *Fault) {
+	if !IsMessageFault(f.Type) {
+		return
+	}
+	if f.Direction == "" {
+		f.Direction = DirectionRequest
+	}
+	if f.Type == TypeCorrupt && f.Count == 0 {
+		f.Count = 1
+	}
+}
+
+// IsMessageFault reports whether a fault works on individual messages rather
+// than on the call as a whole.
+func IsMessageFault(faultType string) bool {
+	switch faultType {
+	case TypeTruncate, TypeCorrupt, TypeDrop:
+		return true
+	}
+	return false
+}
+
+func isKnownFault(faultType string) bool {
+	return faultType == TypeDelay || faultType == TypeAbort || IsMessageFault(faultType)
 }
 
 func validateMatch(rules []Rule) error {

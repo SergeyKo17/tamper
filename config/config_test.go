@@ -168,3 +168,42 @@ target:
 		t.Errorf("rules count = %d, want 0", len(cfg.Rules))
 	}
 }
+
+// The level is validated, and the empty case is settled before validation runs:
+// a missing logger block defaults to info rather than failing on "".
+func TestNew_LoggerLevel(t *testing.T) {
+	cases := []struct {
+		name      string
+		logger    string
+		wantLevel string
+		wantErr   bool
+	}{
+		{name: "known level", logger: "logger:\n  level: \"debug\"\n", wantLevel: "debug"},
+		{name: "unknown level", logger: "logger:\n  level: \"warning\"\n", wantErr: true},
+		{name: "no logger block", logger: "", wantLevel: "info"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			yaml := `
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
+` + c.logger
+			cfg, err := Load(tmpConfigFile(t, yaml))
+			if c.wantErr {
+				if err == nil {
+					t.Fatal("expected a validation error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.Log.Level != c.wantLevel {
+				t.Errorf("level = %q, want %q", cfg.Log.Level, c.wantLevel)
+			}
+		})
+	}
+}
