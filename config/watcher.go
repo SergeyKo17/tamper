@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +22,11 @@ func Watch(ctx context.Context, path string, update chan<- struct{}) (*Watcher, 
 	if err != nil {
 		return nil, err
 	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("get absolute config path: %w", err)
+	}
+	absDir := filepath.Dir(absPath)
 
 	var w Watcher
 	w.cfg.Store(cfg)
@@ -29,7 +35,7 @@ func Watch(ctx context.Context, path string, update chan<- struct{}) (*Watcher, 
 	if err != nil {
 		return nil, fmt.Errorf("create watcher: %w", err)
 	}
-	err = watcher.Add(path)
+	err = watcher.Add(absDir)
 	if err != nil {
 		if err := watcher.Close(); err != nil {
 			slog.Error("watcher close", "err", err)
@@ -37,7 +43,7 @@ func Watch(ctx context.Context, path string, update chan<- struct{}) (*Watcher, 
 		return nil, fmt.Errorf("add watcher path: %w", err)
 	}
 
-	go w.run(ctx, watcher, path, update)
+	go w.run(ctx, watcher, absPath, update)
 
 	return &w, nil
 }
@@ -59,9 +65,10 @@ func (w *Watcher) run(ctx context.Context, watcher *fsnotify.Watcher, path strin
 				slog.Info("watcher events channel closed")
 				return
 			}
-			if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
-				timer.Reset(100 * time.Millisecond)
+			if event.Op == fsnotify.Chmod {
+				continue
 			}
+			timer.Reset(100 * time.Millisecond)
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				slog.Info("watcher stopped")
