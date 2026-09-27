@@ -3,7 +3,6 @@ package fault
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 
 	"github.com/SergeyKo17/tamper/config"
 )
@@ -23,6 +22,9 @@ type Inject struct {
 	Name        string
 	Probability float64
 	Fault       Injector
+	// dice is the source the rule rolls. A zero value falls back to the
+	// global generator, so a rule built as a literal still works.
+	dice roller
 }
 
 // MessageInject pairs a matcher with a mutator and the leg it works on.
@@ -32,6 +34,9 @@ type MessageInject struct {
 	Direction   string
 	Probability float64
 	Mutator     Mutator
+	// dice is the source the rule rolls. A zero value falls back to the
+	// global generator, so a rule built as a literal still works.
+	dice roller
 }
 
 // Injector applies a fault to a gRPC request.
@@ -45,8 +50,17 @@ type Mutator interface {
 	Mutate([]byte) ([]byte, bool, error)
 }
 
-// Fires rolls the dice for one application of a fault.
-func Fires(probability float64) bool { return rand.Float64() < probability } //nolint:gosec
+// fires rolls one dice against one probability. A rule built without a dice of
+// its own -- as a literal rather than through New -- rolls the global one.
+func fires(d roller, probability float64) bool {
+	return roll(d).Float64() < probability
+}
+
+// Fires rolls the dice for one application of the fault to a call.
+func (i Inject) Fires() bool { return fires(i.dice, i.Probability) }
+
+// Fires rolls the dice for one application of the fault to a message.
+func (m MessageInject) Fires() bool { return fires(m.dice, m.Probability) }
 
 // New builds the active rules from configuration, splitting call-level faults
 // from those that work on individual messages.
@@ -66,6 +80,7 @@ func New(rules []config.Rule) (*Injects, error) {
 				Direction:   r.Fault.Direction,
 				Probability: r.Fault.Probability,
 				Mutator:     m,
+				dice:        defaultDice,
 			})
 		default:
 			f, err := newInjector(r.Fault)
@@ -77,6 +92,7 @@ func New(rules []config.Rule) (*Injects, error) {
 				Name:        name,
 				Probability: r.Fault.Probability,
 				Fault:       f,
+				dice:        defaultDice,
 			})
 		}
 	}
