@@ -47,11 +47,7 @@ func New(ctx context.Context, path string) (*proxy.Proxy, error) {
 					slog.Error("load config", "err", err)
 					continue
 				}
-				if newInjects == nil {
-					proxy.SetInjects(&fault.Injects{})
-				} else {
-					proxy.SetInjects(newInjects)
-				}
+				proxy.SetInjects(newInjects)
 			case <-ctx.Done():
 				return
 			}
