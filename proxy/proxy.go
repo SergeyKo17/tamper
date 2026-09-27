@@ -163,7 +163,7 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 
 	var err error
 	for _, inj := range injects.Call {
-		if !inj.Match.Matches(method) || !fault.Fires(inj.Probability) {
+		if !inj.Match.Matches(method) || !inj.Fires() {
 			continue
 		}
 		log.Debug("fault applied", "method", method, "rule", inj.Name)
@@ -335,7 +335,7 @@ func (s *mutationStats) log(log *slog.Logger, direction string) {
 func applyMutators(msg []byte, rules []fault.MessageInject, stats *mutationStats) ([]byte, bool, error) {
 	stats.messages++
 	for _, r := range rules {
-		if !fault.Fires(r.Probability) {
+		if !r.Fires() {
 			continue
 		}
 		out, forward, err := r.Mutator.Mutate(msg)

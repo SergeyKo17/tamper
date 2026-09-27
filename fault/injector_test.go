@@ -108,14 +108,26 @@ func TestNew_RuleNames(t *testing.T) {
 }
 
 // The two ends of the range are certainties, and the proxy leans on that: a
-// rule at 1.0 has to fire on every message, one at 0.0 on none.
+// rule at 1.0 has to fire on every message, one at 0.0 on none. Neither rule
+// here is given a dice, so this also covers the fallback to the global one.
 func TestFires(t *testing.T) {
+	never := Inject{Probability: 0}
+	always := Inject{Probability: 1}
+	neverMsg := MessageInject{Probability: 0}
+	alwaysMsg := MessageInject{Probability: 1}
+
 	for range 100 {
-		if Fires(0) {
+		if never.Fires() {
 			t.Fatal("probability 0 fired")
 		}
-		if !Fires(1) {
+		if !always.Fires() {
 			t.Fatal("probability 1 did not fire")
+		}
+		if neverMsg.Fires() {
+			t.Fatal("message rule at probability 0 fired")
+		}
+		if !alwaysMsg.Fires() {
+			t.Fatal("message rule at probability 1 did not fire")
 		}
 	}
 }

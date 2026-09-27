@@ -81,9 +81,10 @@ rules:
       direction: request
       size: 16
 
-  # Damage count bytes of every answer, chosen at random, leaving the length
-  # untouched. Decoding usually fails outright; when it does not, a field
-  # quietly carries a different value. count defaults to 1.
+  # Damage count bytes of every answer, drawn at random and no two the same,
+  # leaving the length untouched. Decoding usually fails outright; when it does
+  # not, a field quietly carries a different value. count defaults to 1, and a
+  # count past the end of the message damages all of it.
   - match:
       method: "/pkg.Service/Fetch"
     fault:
