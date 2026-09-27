@@ -56,10 +56,9 @@ func TestCorrupt_MutateAlwaysChangesAByte(t *testing.T) {
 	}
 }
 
-// count is an upper bound rather than a guarantee: indexes are drawn at random
-// and the same byte can be picked twice. TestCorrupt_MutateRepeatedIndex pins
-// that down with rolls of its own; here it only has to hold.
-func TestCorrupt_MutateDamagesAtMostCount(t *testing.T) {
+// count is a guarantee, not an upper bound: a repeated index is redrawn, so the
+// count is reached however the draws fall.
+func TestCorrupt_MutateDamagesExactlyCount(t *testing.T) {
 	c := NewCorrupt(3)
 	for i := range 100 {
 		msg := bytes.Repeat([]byte("x"), 64)
@@ -68,8 +67,8 @@ func TestCorrupt_MutateDamagesAtMostCount(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run %d: unexpected error: %v", i, err)
 		}
-		if n := countDiff(want, out); n > 3 {
-			t.Fatalf("run %d: expected at most 3 damaged bytes, got %d", i, n)
+		if n := countDiff(want, out); n != 3 {
+			t.Fatalf("run %d: expected exactly 3 damaged bytes, got %d", i, n)
 		}
 	}
 }
@@ -109,27 +108,44 @@ func TestCorrupt_MutateDamagesTheBytesTheDicePicks(t *testing.T) {
 	}
 }
 
-// Why count is an upper bound: the same index drawn twice is damaged twice, and
-// the message ends up one byte short of what count promised. The two masks
-// differ here, so the second pass moves the byte further rather than putting it
-// back -- with one mask twice, XOR would undo itself and leave the message
-// whole.
-func TestCorrupt_MutateRepeatedIndex(t *testing.T) {
+// An index drawn twice is not damaged twice: the repeat is dropped and redrawn,
+// which costs a roll and still leaves count bytes damaged. The rolls here are
+// index, mask, the repeat, then the index that replaces it and its mask.
+func TestCorrupt_MutateRedrawsARepeatedIndex(t *testing.T) {
 	msg := []byte("0123456789abcdef")
 	want := bytes.Clone(msg)
 	c := Corrupt{
 		count: 2,
-		dice:  &sequenceDice{t: t, ints: []int{4, 0, 4, 1}},
+		dice:  &sequenceDice{t: t, ints: []int{4, 0, 4, 9, 1}},
 	}
 
 	out, _, err := c.Mutate(msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if n := countDiff(want, out); n != 1 {
-		t.Fatalf("expected 1 damaged byte from two rolls of the same index, got %d", n)
+	if n := countDiff(want, out); n != 2 {
+		t.Fatalf("expected 2 damaged bytes, got %d", n)
 	}
-	if out[4] != want[4]^1^2 {
-		t.Errorf("byte 4 = %#x, want both masks applied: %#x", out[4], want[4]^1^2)
+	if out[4] != want[4]^1 {
+		t.Errorf("byte 4 = %#x, want the first mask only: %#x", out[4], want[4]^1)
+	}
+	if out[9] != want[9]^2 {
+		t.Errorf("byte 9 = %#x, want the second mask: %#x", out[9], want[9]^2)
+	}
+}
+
+// A count past the end of the message means the whole message. Without the cap
+// the draw for a distinct index it cannot have would never finish.
+func TestCorrupt_MutateCountLargerThanMessage(t *testing.T) {
+	msg := []byte("0123")
+	want := bytes.Clone(msg)
+	c := NewCorrupt(10)
+
+	out, _, err := c.Mutate(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := countDiff(want, out); n != len(want) {
+		t.Fatalf("expected all %d bytes damaged, got %d", len(want), n)
 	}
 }

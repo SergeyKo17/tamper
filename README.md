@@ -121,7 +121,7 @@ the upstream to enforce theirs.
 | `fault.msg` | Error message returned to client (abort only) |
 | `fault.direction` | `request`, `response` or `both` (message faults only, default `request`) |
 | `fault.size` | Bytes to keep (truncate only) |
-| `fault.count` | Bytes to damage (corrupt only, default `1`) |
+| `fault.count` | Bytes to damage, capped at the message length (corrupt only, default `1`) |
 
 An unknown key is rejected when the config loads. A typo that is silently
 dropped leaves a rule running on zero values, which is worse than a startup
@@ -159,7 +159,9 @@ intact and announces the shorter length, and the payload inside it does not
 parse. A message already at or below `size` passes through untouched — the fault
 cuts messages down, it never pads them out.
 
-**`corrupt`** damages `count` bytes chosen at random, leaving the length alone.
+**`corrupt`** damages `count` bytes drawn at random, leaving the length alone.
+No two of them are the same byte, so `count` is what you get rather than an
+upper bound, and a `count` past the end of the message damages all of it.
 Decoding such a message usually fails outright; when it does not, a field
 quietly carries a different value, which is the more interesting case to test.
 Because the bytes are opaque, which field is hit is not something you choose.
