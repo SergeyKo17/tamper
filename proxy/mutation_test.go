@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -44,6 +45,77 @@ func startReportEcho(t *testing.T) string {
 	go srv.Serve(lis)
 
 	return lis.Addr().String()
+}
+
+// constantReply is what startConstantEcho answers, whatever it was asked.
+const constantReply = "constant-reply"
+
+// startConstantEcho runs a target whose answer says nothing about the request:
+// it always replies constantReply and records the body it saw. That is what
+// tells the two legs apart for corrupt, which keeps the length -- the length in
+// startReportEcho's answer, the evidence truncate leans on, does not move.
+// Damage on the way in shows up in the recorded body; damage on the way back
+// shows up in the answer the client gets.
+func startConstantEcho(t *testing.T) (addr string, seen *atomic.Pointer[string]) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen = &atomic.Pointer[string]{}
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		var body rawBytes
+		if err := stream.RecvMsg(&body); err != nil {
+			return err
+		}
+		got := string(body)
+		seen.Store(&got)
+		reply := rawBytes(constantReply)
+		return stream.SendMsg(&reply)
+	}))
+	t.Cleanup(srv.Stop)
+	go srv.Serve(lis)
+
+	return lis.Addr().String(), seen
+}
+
+// startCountingStreamEcho echoes every message back and counts what reached it.
+// The count is the request leg's witness: a stream that comes back empty says
+// nothing about which leg swallowed it.
+func startCountingStreamEcho(t *testing.T) (addr string, received *atomic.Int64) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	received = &atomic.Int64{}
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		for {
+			var msg rawBytes
+			if err := stream.RecvMsg(&msg); err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
+			}
+			received.Add(1)
+			if err := stream.SendMsg(&msg); err != nil {
+				return err
+			}
+		}
+	}))
+	t.Cleanup(srv.Stop)
+	go srv.Serve(lis)
+
+	return lis.Addr().String(), received
 }
 
 // messageInjects wraps message rules the way the proxy expects them.
@@ -123,16 +195,83 @@ func TestProxy_CorruptRequest(t *testing.T) {
 		Probability: 1.0,
 		Mutator:     fault.NewCorrupt(1),
 	})
-	p := startProxy(t, startEcho(t), injects)
+	target, seen := startConstantEcho(t)
+	p := startProxy(t, target, injects)
 	conn := dialProxy(t, p)
 
 	const body = "0123456789abcdef"
 	got := call(t, conn, body)
-	if got == body {
-		t.Fatal("expected a damaged body, got it unchanged")
+
+	arrived := seen.Load()
+	if arrived == nil {
+		t.Fatal("the target was never reached")
 	}
-	if len(got) != len(body) {
-		t.Fatalf("expected length %d, got %d", len(body), len(got))
+	if *arrived == body {
+		t.Error("expected the target to see a damaged request, got it intact")
+	}
+	if len(*arrived) != len(body) {
+		t.Errorf("request length = %d, want %d", len(*arrived), len(body))
+	}
+	if got != constantReply {
+		t.Errorf("answer = %q, want it untouched: %q", got, constantReply)
+	}
+}
+
+// The answer is damaged on the way back, and the target is left to report that
+// it was asked properly.
+func TestProxy_CorruptResponse(t *testing.T) {
+	injects := messageInjects(fault.MessageInject{
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionResponse,
+		Probability: 1.0,
+		Mutator:     fault.NewCorrupt(1),
+	})
+	target, seen := startConstantEcho(t)
+	p := startProxy(t, target, injects)
+	conn := dialProxy(t, p)
+
+	const body = "0123456789abcdef"
+	got := call(t, conn, body)
+
+	arrived := seen.Load()
+	if arrived == nil {
+		t.Fatal("the target was never reached")
+	}
+	if *arrived != body {
+		t.Errorf("request = %q, want it untouched: %q", *arrived, body)
+	}
+	if got == constantReply {
+		t.Error("expected a damaged answer, got it unchanged")
+	}
+	if len(got) != len(constantReply) {
+		t.Errorf("answer length = %d, want %d", len(got), len(constantReply))
+	}
+}
+
+// Both legs, one rule.
+func TestProxy_CorruptBoth(t *testing.T) {
+	injects := messageInjects(fault.MessageInject{
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionBoth,
+		Probability: 1.0,
+		Mutator:     fault.NewCorrupt(1),
+	})
+	target, seen := startConstantEcho(t)
+	p := startProxy(t, target, injects)
+	conn := dialProxy(t, p)
+
+	const body = "0123456789abcdef"
+	got := call(t, conn, body)
+
+	arrived := seen.Load()
+	if arrived == nil {
+		t.Fatal("the target was never reached")
+	}
+	if *arrived == body {
+		t.Error("expected the target to see a damaged request, got it intact")
+	}
+	if got == constantReply {
+		t.Error("expected a damaged answer, got it unchanged")
 	}
 }
 
@@ -178,12 +317,39 @@ func TestProxy_DropLeavesHoleInStream(t *testing.T) {
 		Probability: 1.0,
 		Mutator:     fault.NewDrop(),
 	})
-	p := startProxy(t, startStreamEcho(t), injects)
+	target, received := startCountingStreamEcho(t)
+	p := startProxy(t, target, injects)
 	conn := dialProxy(t, p)
 
 	bodies := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	if got := echoStream(t, conn, bodies); len(got) != 0 {
 		t.Fatalf("expected every message dropped, got %d back", len(got))
+	}
+	if n := received.Load(); n != 0 {
+		t.Errorf("the target received %d messages, want none: they were dropped on the way in", n)
+	}
+}
+
+// Dropped on the way back, the messages still reach the target: the hole is in
+// the answers, and from the client alone that is indistinguishable from a
+// request never sent.
+func TestProxy_DropResponse(t *testing.T) {
+	injects := messageInjects(fault.MessageInject{
+		Match:       config.Match{Method: "/test/Echo"},
+		Direction:   config.DirectionResponse,
+		Probability: 1.0,
+		Mutator:     fault.NewDrop(),
+	})
+	target, received := startCountingStreamEcho(t)
+	p := startProxy(t, target, injects)
+	conn := dialProxy(t, p)
+
+	bodies := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
+	if got := echoStream(t, conn, bodies); len(got) != 0 {
+		t.Fatalf("expected every answer dropped, got %d back", len(got))
+	}
+	if n := received.Load(); n != int64(len(bodies)) {
+		t.Errorf("the target received %d messages, want all %d", n, len(bodies))
 	}
 }
 
