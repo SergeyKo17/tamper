@@ -1,6 +1,7 @@
 package fault
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -129,5 +130,38 @@ func TestFires(t *testing.T) {
 		if !alwaysMsg.Fires() {
 			t.Fatal("message rule at probability 1 did not fire")
 		}
+	}
+}
+
+// newMutator is reached through New, which gates it on IsMessageFault, so its
+// three types are what a configuration can ask for and the last case is
+// defensive: it answers the type list drifting apart between the two packages.
+func TestNewMutator(t *testing.T) {
+	cases := []struct {
+		faultType string
+		want      Mutator
+		wantErr   bool
+	}{
+		{faultType: config.TypeCorrupt, want: Corrupt{}},
+		{faultType: config.TypeTruncate, want: Truncate{}},
+		{faultType: config.TypeDrop, want: Drop{}},
+		{faultType: "nonsense", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.faultType, func(t *testing.T) {
+			got, err := newMutator(config.Fault{Type: c.faultType})
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %T", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if fmt.Sprintf("%T", got) != fmt.Sprintf("%T", c.want) {
+				t.Errorf("mutator = %T, want %T", got, c.want)
+			}
+		})
 	}
 }

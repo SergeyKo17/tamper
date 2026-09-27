@@ -252,3 +252,40 @@ func TestClientTLSConfig_NilWithoutTLSBlock(t *testing.T) {
 		t.Errorf("expected no TLS config, got %+v", cfg)
 	}
 }
+
+// A CA file that is not there is a startup error rather than a silent fall back
+// to the system roots, which would trust a different set of targets than asked.
+func TestClientTLSConfig_RejectsMissingCAFile(t *testing.T) {
+	_, err := clientTLSConfig(&config.ClientTLS{CAFile: filepath.Join(t.TempDir(), "absent.crt")})
+	if err == nil {
+		t.Fatal("expected an error for a CA file that does not exist")
+	}
+}
+
+// Same for the client certificate of a mutual-TLS target: without it the
+// connection would come up and be refused by the target instead.
+func TestClientTLSConfig_RejectsUnreadableClientCertificate(t *testing.T) {
+	dir := t.TempDir()
+	_, err := clientTLSConfig(&config.ClientTLS{
+		CertFile: filepath.Join(dir, "absent.crt"),
+		KeyFile:  filepath.Join(dir, "absent.key"),
+	})
+	if err == nil {
+		t.Fatal("expected an error for a client certificate that does not exist")
+	}
+}
+
+// The client certificate is loaded and offered to the target when both files
+// are readable.
+func TestClientTLSConfig_LoadsClientCertificate(t *testing.T) {
+	ca := newTestCA(t)
+	certPath, keyPath := ca.issue(t, "tamper-client")
+
+	cfg, err := clientTLSConfig(&config.ClientTLS{CertFile: certPath, KeyFile: keyPath})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Certificates) != 1 {
+		t.Fatalf("expected 1 client certificate, got %d", len(cfg.Certificates))
+	}
+}
