@@ -1,0 +1,22 @@
+# The build context is read in full before anything runs, and .git changes with
+# every commit, which would defeat the layer cache on its own.
+.git
+.github
+.golangci.yml
+
+# Build output and anything the toolchain leaves behind.
+bin
+*.exe
+coverage.out
+
+# A local configuration must never end up inside an image.
+tamper.yml
+
+# Documentation and packaging that the build does not read.
+*.md
+LICENSE
+Makefile
+Dockerfile
+Dockerfile.release
+.dockerignore
+.goreleaser.yml
