@@ -31,8 +31,9 @@ anywhere without a schema, and it is also their limit: tamper damages a message,
 it does not reach into a field. Aiming a fault at one field needs the protobuf
 schema and is not part of this release.
 
-Faults are reloaded from disk while the proxy runs, without dropping
-connections.
+Faults are reloaded while the proxy runs, without dropping connections, either
+when the file changes or on a signal. See
+[Reloading the configuration](#reloading-the-configuration).
 
 ## Install
 
@@ -86,6 +87,35 @@ tamper --config tamper.yml
 ```
 
 Editing `rules` while tamper is running takes effect immediately.
+
+## Reloading the configuration
+
+There are two ways in, and both end up rereading the same file:
+
+- **The file changes.** tamper watches the directory the config lives in and
+  reloads a moment after a write settles. This is what you want while editing
+  rules locally.
+- **SIGHUP.** `kill -HUP $(pidof tamper)` rereads the file on demand, whether or
+  not the file system reported anything.
+
+A reload swaps the rules and the log level on connections that are already open.
+A file that does not parse is logged and otherwise ignored: the rules in force
+stay in force, because a typo should not quietly leave the proxy injecting
+nothing.
+
+### In a container
+
+The signal is not a convenience there, it is the only way:
+
+```bash
+docker kill -s HUP tamper
+```
+
+A config bind-mounted from a Windows host reaches the container through a
+translation layer that delivers no file system events, so the watcher never
+learns of the change. Mounting the directory rather than the file alone is still
+worth doing — a single-file mount hides the rename an editor saves through — but
+it does not help here, and the signal is what reloads the proxy.
 
 ## Configuration
 

@@ -25,7 +25,7 @@ rules:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path, make(chan struct{}, 1))
+	w, err := Watch(ctx, path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,7 +56,7 @@ rules:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path, make(chan struct{}, 1))
+	w, err := Watch(ctx, path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,7 +111,7 @@ target:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path, make(chan struct{}, 1))
+	w, err := Watch(ctx, path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +130,7 @@ target:
 
 func TestWatch_InvalidPath(t *testing.T) {
 	ctx := context.Background()
-	_, err := Watch(ctx, "/nonexistent/tamper.yaml", make(chan struct{}, 1))
+	_, err := Watch(ctx, "/nonexistent/tamper.yaml")
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -145,7 +145,7 @@ target:
 `)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	_, err := Watch(ctx, path, make(chan struct{}, 1))
+	_, err := Watch(ctx, path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestWatch_SurvivesFileReplacement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := Watch(ctx, path, make(chan struct{}, 1))
+	w, err := Watch(ctx, path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,4 +216,84 @@ func TestWatch_SurvivesFileReplacement(t *testing.T) {
 
 	replaceFile(t, path, configWithAddr(":6060"))
 	waitForAddr(t, w, ":6060")
+}
+
+// Reload is the path a process takes when the file system reports nothing at
+// all, so it has to pick up a change the watcher never saw and announce it.
+func TestWatcher_Reload(t *testing.T) {
+	path := tmpConfigFile(t, `
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
+`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w, err := Watch(ctx, path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	drain(w.Updates())
+
+	if err := os.WriteFile(path, []byte(`
+listen:
+  addr: ":9091"
+target:
+  addr: "localhost:50051"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	if got := w.Config().Listen.Addr; got != ":9091" {
+		t.Errorf("listen = %q, want %q", got, ":9091")
+	}
+	select {
+	case <-w.Updates():
+	default:
+		t.Error("the reload was not announced on the update channel")
+	}
+}
+
+// A file Reload cannot parse is reported to the caller and leaves the
+// configuration in force: a bad edit does not take the proxy's rules away.
+func TestWatcher_ReloadInvalidConfig(t *testing.T) {
+	path := tmpConfigFile(t, `
+listen:
+  addr: ":9090"
+target:
+  addr: "localhost:50051"
+`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w, err := Watch(ctx, path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	drain(w.Updates())
+
+	if err := os.WriteFile(path, []byte("listen: [:9091\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Reload(); err == nil {
+		t.Fatal("expected an error for a file that does not parse")
+	}
+
+	if got := w.Config().Listen.Addr; got != ":9090" {
+		t.Errorf("listen = %q, want the previous %q", got, ":9090")
+	}
+}
+
+// drain empties the update channel of whatever the watcher's own goroutine
+// noticed while the test was setting up, so what is left in it afterwards came
+// from the reload under test.
+func drain(update <-chan struct{}) {
+	select {
+	case <-update:
+	default:
+	}
 }

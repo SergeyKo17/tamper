@@ -4,12 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/SergeyKo17/tamper/app"
+	"github.com/SergeyKo17/tamper/config"
 )
 
 var (
@@ -19,7 +20,8 @@ var (
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatal(err)
+		slog.Error("tamper failed", "version", version, "commit", commit, "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -33,24 +35,51 @@ func run() error {
 		return nil
 	}
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// The logger belongs to the process, not to the proxy: everything below is
+	// handed the level variable this handler reads, and sets it from the
+	// configuration without replacing the handler.
+	var lvl slog.LevelVar
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &lvl})))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Notified before the proxy is assembled, so a startup that waits on an
+	// unreachable target can still be interrupted.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	go func() {
-		<-sigs
-		cancel()
-	}()
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
 
-	proxy, err := app.New(ctx, *configPath)
+	proxy, watcher, err := app.New(ctx, *configPath, &lvl)
 	if err != nil {
 		return err
 	}
-	if err := proxy.Run(ctx); err != nil {
-		return err
-	}
+	go reloadOnHUP(ctx, hup, watcher)
 
-	return nil
+	slog.Info("tamper started",
+		"version", version,
+		"commit", commit,
+		"listen", proxy.Addr().String(),
+		"target", watcher.Config().Target.Addr,
+	)
+
+	return proxy.Run(ctx)
+}
+
+// reloadOnHUP rereads the configuration on every SIGHUP. It is the reload path
+// that does not depend on the file system reporting the change: a config
+// bind-mounted from a Windows host delivers no events to the container.
+func reloadOnHUP(ctx context.Context, hup <-chan os.Signal, watcher *config.Watcher) {
+	for {
+		select {
+		case <-hup:
+			if err := watcher.Reload(); err != nil {
+				slog.Error("reload config", "err", err)
+				continue
+			}
+			slog.Info("configuration reloaded")
+		case <-ctx.Done():
+			return
+		}
+	}
 }

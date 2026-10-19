@@ -35,6 +35,8 @@ EXPOSE 9090
 
 # The configuration is mounted, never baked in. Mount the directory rather than
 # the file alone: a single-file bind mount hides the rename the watcher reads as
-# a reload, and hot reload stops working without a word.
+# a reload. From a Windows host even that is not enough -- the mount delivers no
+# file system events at all -- so reload with a signal there:
+# docker kill -s HUP <container>.
 ENTRYPOINT ["/tamper"]
 CMD ["-config", "/etc/tamper/tamper.yml"]
