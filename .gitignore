@@ -30,6 +30,9 @@ go.work.sum
 # Compiled binary
 /tamper
 
+# make build output
+/bin/
+
 # Runtime config
 tamper.yml
 tamper.yml.bak
