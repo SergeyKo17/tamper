@@ -33,6 +33,9 @@ go.work.sum
 # make build output
 /bin/
 
+# goreleaser output
+/dist/
+
 # Runtime config
 tamper.yml
 tamper.yml.bak
