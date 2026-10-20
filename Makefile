@@ -1,4 +1,4 @@
-.PHONY: lint test build docker
+.PHONY: lint test build docker snapshot
 
 # Overridable from the outside: make build VERSION=v0.1.0. git describe reports
 # the tag when HEAD sits on one, and the commit with a -dirty suffix otherwise,
@@ -22,3 +22,8 @@ build:
 # build context carries no git repository.
 docker:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t tamper:$(VERSION) .
+
+# A dry run of the release: builds the whole matrix into dist/ and publishes
+# nothing, so the configuration can be checked without pushing a tag.
+snapshot:
+	goreleaser release --snapshot --clean

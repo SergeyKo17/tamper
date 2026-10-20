@@ -37,9 +37,32 @@ when the file changes or on a signal. See
 
 ## Install
 
+### Container
+
 ```bash
-go install github.com/SergeyKo17/tamper/cmd/tamper@latest
+docker pull ghcr.io/sergeyko17/tamper:0.1.0
 ```
+
+Pin the exact version in a compose file or a CI service. A patch tag such as
+`0.1.0` keeps pointing at the image it was published with, while `latest` and
+`0.1` move on to the next release.
+
+### Binary
+
+Download the archive for your platform from the
+[releases page](https://github.com/SergeyKo17/tamper/releases) and unpack it.
+Every archive carries the binary, this README and `tamper.example.yml`;
+`checksums.txt` next to them verifies the download. Linux, macOS and Windows
+are covered, on amd64 and arm64.
+
+### From source
+
+```bash
+go install github.com/SergeyKo17/tamper/cmd/tamper@v0.1.0
+```
+
+A binary built this way reports its version, which a build from a plain
+`go build` cannot: the version is stamped in at link time.
 
 ## Quick start
 

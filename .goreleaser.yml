@@ -1,0 +1,67 @@
+# The release builds every binary from one Linux runner: with CGO off Go
+# cross-compiles to any GOOS/GOARCH pair, so no macOS or Windows runner has to
+# enter the picture. goreleaser only spreads the matrix and calls go build.
+version: 2
+
+project_name: tamper
+
+before:
+  hooks:
+    # Download, not tidy: a release must not rewrite the module files it is
+    # built from. CI already fails a PR whose go.mod is untidy.
+    - go mod download
+
+builds:
+  - id: tamper
+    main: ./cmd/tamper
+    binary: tamper
+    env:
+      - CGO_ENABLED=0
+    flags:
+      # Keeps the build machine's absolute paths out of the binary.
+      - -trimpath
+    # The two variables cmd/tamper/main.go declares. Without them a released
+    # binary would report itself as dev (none).
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Nobody runs a gRPC test proxy on Windows ARM, and every combination is
+      # one more archive on the release page.
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # The example configuration travels with the binary: tamper needs a -config
+    # to do anything, and whoever downloaded an archive should not have to go
+    # back to the repository to find out what one looks like.
+    files:
+      - README.md
+      - LICENSE
+      - tamper.example.yml
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # A tag like v0.2.0-rc.1 publishes as a pre-release on its own.
+  prerelease: auto

@@ -6,6 +6,7 @@
 
 # Build output and anything the toolchain leaves behind.
 bin
+dist
 *.exe
 coverage.out
 
@@ -17,6 +18,5 @@ tamper.yml
 LICENSE
 Makefile
 Dockerfile
-Dockerfile.release
 .dockerignore
 .goreleaser.yml
