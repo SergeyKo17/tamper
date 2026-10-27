@@ -23,6 +23,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// defaultStopTimeout caps the wait for open calls when the proxy is stopping.
+// A stream nobody closes would otherwise hold a graceful stop forever.
+const defaultStopTimeout = 5 * time.Second
+
 // Proxy is a gRPC fault injection proxy.
 type Proxy struct {
 	server  *grpc.Server
@@ -32,6 +36,8 @@ type Proxy struct {
 	// calls numbers the calls passing through, so the lines a single call
 	// leaves behind can be told apart from those of the calls beside it.
 	calls atomic.Uint64
+	// stopTimeout is defaultStopTimeout outside tests.
+	stopTimeout time.Duration
 }
 
 // New creates a Proxy that listens and forwards as described by cfg.
@@ -60,7 +66,7 @@ func New(ctx context.Context, cfg *config.Config, injects *fault.Injects) (*Prox
 		return nil, fmt.Errorf("create listener: %w", err)
 	}
 
-	p := Proxy{lis: lis}
+	p := Proxy{lis: lis, stopTimeout: defaultStopTimeout}
 	p.storeInjects(injects)
 	p.server = grpc.NewServer(
 		grpc.Creds(serverCreds),
@@ -359,8 +365,22 @@ func (p *Proxy) Run(ctx context.Context) error {
 				slog.Error("client connection close", "err", err)
 			}
 		}()
+
 		<-ctx.Done()
-		p.server.GracefulStop()
+
+		done := make(chan struct{})
+		go func() {
+			p.server.GracefulStop()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(p.stopTimeout):
+			slog.Warn("graceful stop timed out", "timeout", p.stopTimeout.String())
+			p.server.Stop()
+			<-done
+		}
 	}()
 
 	return p.server.Serve(p.lis)
