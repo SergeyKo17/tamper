@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,28 @@ func echoHandler(_ any, stream grpc.ServerStream) error {
 		return err
 	}
 	return stream.SendMsg(&body)
+}
+
+// startHang serves a call that never answers, so a stream through it stays
+// open. called is closed when the first call arrives.
+func startHang(t *testing.T) (addr string, called chan struct{}) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	called = make(chan struct{})
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, _ grpc.ServerStream) error {
+		close(called)
+		<-ctx.Done()
+		return nil
+	}))
+	t.Cleanup(srv.Stop)
+	go srv.Serve(lis)
+	return lis.Addr().String(), called
 }
 
 func startEcho(t *testing.T) string {
@@ -227,5 +250,50 @@ func TestProxy_ChainThreadsContext(t *testing.T) {
 		if got := askTarget(t, conn, ctx, c.key); got != c.want {
 			t.Errorf("target saw %s = %q, want %q", c.key, got, c.want)
 		}
+	}
+}
+
+func TestProxy_RunStopsOnHungCall(t *testing.T) {
+	logs := captureLogs(t)
+	addr, called := startHang(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := New(ctx, &config.Config{
+		Listen: config.Listen{Addr: "127.0.0.1:0"},
+		Target: config.Target{Addr: addr},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.stopTimeout = 50 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+
+	conn := dialProxy(t, p)
+	go func() {
+		body := rawBytes([]byte("hello"))
+		var resp rawBytes
+		_ = conn.Invoke(context.Background(), "/test/Echo", &body, &resp)
+	}()
+
+	// The call reached the target and never comes back, so a graceful stop
+	// cannot finish on its own.
+	<-called
+	stopped := time.Now()
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after the stop timeout")
+	}
+
+	if elapsed := time.Since(stopped); elapsed < p.stopTimeout {
+		t.Errorf("Run returned in %v, before the %v timeout", elapsed, p.stopTimeout)
+	}
+	if out := logs.String(); !strings.Contains(out, "graceful stop timed out") {
+		t.Errorf("no timeout in the log: %s", out)
 	}
 }

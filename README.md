@@ -140,6 +140,23 @@ learns of the change. Mounting the directory rather than the file alone is still
 worth doing — a single-file mount hides the rename an editor saves through — but
 it does not help here, and the signal is what reloads the proxy.
 
+## Stopping
+
+SIGINT and SIGTERM stop the proxy. New connections are refused at once, and
+calls already in flight are given five seconds to finish.
+
+Calls still open after that are dropped, and their clients see a transport
+error. The wait is capped on purpose: tamper relays every call as a stream, so
+a `drop` rule, or a target that stops answering, leaves behind a call that would
+hold the process open forever. The forced stop is reported:
+
+```json
+{"level":"WARN","msg":"graceful stop timed out","timeout":"5s"}
+```
+In a container the cap is what makes the difference. `docker stop` sends
+SIGTERM and follows it with SIGKILL ten seconds later; five seconds leaves the
+forced stop room to finish before the process is killed outright.
+
 ## Configuration
 
 The config has two sides. `listen` faces your clients, where tamper acts as a
