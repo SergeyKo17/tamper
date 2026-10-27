@@ -1,4 +1,4 @@
-.PHONY: lint test build docker snapshot
+.PHONY: lint test build docker snapshot vuln
 
 # Overridable from the outside: make build VERSION=v0.1.0. git describe reports
 # the tag when HEAD sits on one, and the commit with a -dirty suffix otherwise,
@@ -27,3 +27,8 @@ docker:
 # nothing, so the configuration can be checked without pushing a tag.
 snapshot:
 	goreleaser release --snapshot --clean
+
+# Network and a whole-program analysis, so it is not part of lint: the result
+# depends on the day's vulnerability database, not on the code.
+vuln:
+	go tool govulncheck ./...
