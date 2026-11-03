@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,9 +24,21 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// defaultStopTimeout caps the wait for open calls when the proxy is stopping.
-// A stream nobody closes would otherwise hold a graceful stop forever.
+// defaultStopTimeout is the deadline for everything the calls have not let go
+// of once the proxy is stopping: a connection the client has not closed, or a
+// response it stopped reading. Cancelling a call reaches its target side, not
+// the client side, so past this point the transport is torn down instead.
 const defaultStopTimeout = 5 * time.Second
+
+// handshakeTimeout bounds how long a new connection may take to finish the
+// HTTP/2 handshake. Both the graceful and the forced stop wait for connections
+// still in it, so a peer that opens a socket and sends nothing would hold the
+// shutdown well past the stop timeout.
+const handshakeTimeout = 5 * time.Second
+
+// errShuttingDown is the cause a call's context carries when the shutdown, and
+// not the client or an injected fault, ended it.
+var errShuttingDown = errors.New("shutting down")
 
 // Proxy is a gRPC fault injection proxy.
 type Proxy struct {
@@ -36,8 +49,15 @@ type Proxy struct {
 	// calls numbers the calls passing through, so the lines a single call
 	// leaves behind can be told apart from those of the calls beside it.
 	calls atomic.Uint64
-	// stopTimeout is defaultStopTimeout outside tests.
+	// stopTimeout caps the graceful stop; see defaultStopTimeout.
 	stopTimeout time.Duration
+	// shutdown is closed when the proxy stops, to cancel the calls in flight.
+	shutdown       context.Context
+	shutdownCancel context.CancelFunc
+	// closeOnce keeps Close idempotent: its owner defers it right after New,
+	// whether the proxy went on to run or not.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // New creates a Proxy that listens and forwards as described by cfg.
@@ -66,13 +86,15 @@ func New(ctx context.Context, cfg *config.Config, injects *fault.Injects) (*Prox
 		return nil, fmt.Errorf("create listener: %w", err)
 	}
 
-	p := Proxy{lis: lis, stopTimeout: defaultStopTimeout}
+	shutdown, shutdownCancel := context.WithCancel(context.Background())
+	p := Proxy{lis: lis, stopTimeout: defaultStopTimeout, shutdown: shutdown, shutdownCancel: shutdownCancel}
 	p.storeInjects(injects)
 	p.server = grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.UnknownServiceHandler(p.handler),
 		grpc.MaxRecvMsgSize(msgSize(cfg.Listen.MaxRecvMsgSize)),
 		grpc.MaxSendMsgSize(msgSize(cfg.Listen.MaxSendMsgSize)),
+		grpc.ConnectionTimeout(handshakeTimeout),
 	)
 
 	p.conn, err = grpc.NewClient(cfg.Target.Addr,
@@ -83,6 +105,7 @@ func New(ctx context.Context, cfg *config.Config, injects *fault.Injects) (*Prox
 		),
 	)
 	if err != nil {
+		shutdownCancel()
 		if cerr := lis.Close(); cerr != nil {
 			slog.Error("listener close", "err", cerr)
 		}
@@ -167,6 +190,15 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 
 	injects := p.injects.Load()
 
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	defer context.AfterFunc(p.shutdown, func() { cancel(errShuttingDown) })()
+	defer func() {
+		if errors.Is(context.Cause(ctx), errShuttingDown) && isCanceled(retErr) {
+			retErr = status.Error(codes.Unavailable, "proxy is shutting down")
+		}
+	}()
+
 	var err error
 	for _, inj := range injects.Call {
 		if !inj.Match.Matches(method) || !inj.Fires() {
@@ -177,9 +209,6 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 			return err
 		}
 	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	clientStream, err := grpc.NewClientStream(ctx, forwardDesc, p.conn, method)
 	if err != nil {
@@ -192,11 +221,16 @@ func (p *Proxy) handler(srv any, stream grpc.ServerStream) (retErr error) {
 	// reaches the response side as a bare Canceled. The real cause is kept here
 	// so the client is told what actually went wrong.
 	var reqErr atomic.Pointer[error]
+	// This outlives the handler whenever the response side ends first: a target
+	// that answers without reading the request to the end, or the shutdown
+	// cancelling the call. It is then left in a RecvMsg on a stream grpc-go has
+	// already finished, which ends it with an error. Nothing waits for it,
+	// because waiting is the hang the shutdown exists to avoid.
 	go func() {
 		if err := forwardRequests(stream, clientStream, reqRules, log); err != nil {
 			log.Warn("forward requests", "method", method, "err", err)
 			reqErr.Store(&err)
-			cancel()
+			cancel(err)
 		}
 	}()
 
@@ -357,31 +391,72 @@ func applyMutators(msg []byte, rules []fault.MessageInject, stats *mutationStats
 	return msg, true, nil
 }
 
-// Run starts the proxy server and blocks until the context is canceled.
+// Run serves until ctx is canceled or the server fails on its own, stops both
+// ways round, and returns once everything is closed.
 func (p *Proxy) Run(ctx context.Context) error {
+	served := make(chan error, 1)
+	go func() { served <- p.server.Serve(p.lis) }()
+
+	select {
+	case err := <-served:
+		// The listener is gone, while the calls it accepted are not: stopping
+		// is what ends them.
+		p.stop("serve failed")
+		return err
+	case <-ctx.Done():
+	}
+
+	p.stop("context canceled")
+	// Serve returns once the stop has run its course. ErrServerStopped is the
+	// stop we asked for; anything else went wrong on the way to it.
+	if err := <-served; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		return err
+	}
+	return nil
+}
+
+// stop ends the server, giving the calls in flight stopTimeout to let go of
+// what they hold. The reason is logged because the lines that follow say how
+// the stop went, not what started it.
+func (p *Proxy) stop(reason string) {
+	slog.Info("stopping", "reason", reason)
+	p.shutdownCancel()
+	stopped := time.Now()
+
+	done := make(chan struct{})
 	go func() {
-		defer func() {
-			if err := p.conn.Close(); err != nil {
-				slog.Error("client connection close", "err", err)
-			}
-		}()
-
-		<-ctx.Done()
-
-		done := make(chan struct{})
-		go func() {
-			p.server.GracefulStop()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-		case <-time.After(p.stopTimeout):
-			slog.Warn("graceful stop timed out", "timeout", p.stopTimeout.String())
-			p.server.Stop()
-			<-done
-		}
+		p.server.GracefulStop()
+		close(done)
 	}()
 
-	return p.server.Serve(p.lis)
+	select {
+	case <-done:
+		slog.Info("graceful stop", "duration", time.Since(stopped).String())
+	case <-time.After(p.stopTimeout):
+		slog.Warn("graceful stop timed out", "timeout", p.stopTimeout.String())
+		p.server.Stop()
+		<-done
+	}
+}
+
+// Close releases what New took: the connection to the target and the listener.
+// Running the proxy does not close them, so this is the owner's to call, and it
+// is safe to call more than once.
+func (p *Proxy) Close() error {
+	p.closeOnce.Do(func() {
+		p.shutdownCancel()
+		p.closeErr = p.conn.Close()
+		// On the usual path the server closed the listener while stopping.
+		if err := p.lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			p.closeErr = errors.Join(p.closeErr, err)
+		}
+	})
+	return p.closeErr
+}
+
+// isCanceled reports whether err carries a cancellation. The forms differ by
+// origin: the streams fail with a gRPC status, while a fault interrupted
+// mid-delay returns the bare context error.
+func isCanceled(err error) bool {
+	return status.Code(err) == codes.Canceled || errors.Is(err, context.Canceled)
 }

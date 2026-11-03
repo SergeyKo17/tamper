@@ -229,7 +229,7 @@ func TestNew_ToleratesUnreachableTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected the proxy to start, got %v", err)
 	}
-	t.Cleanup(func() { p.lis.Close() })
+	t.Cleanup(func() { p.Close() })
 }
 
 func TestCertPool_RejectsFileWithoutCertificates(t *testing.T) {

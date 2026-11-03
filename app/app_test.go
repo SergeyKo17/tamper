@@ -89,6 +89,7 @@ func start(ctx context.Context, t *testing.T, path string, lvl *slog.LevelVar) *
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	t.Cleanup(func() { p.Close() })
 	go func() {
 		if err := p.Run(ctx); err != nil && ctx.Err() == nil {
 			t.Errorf("run proxy: %v", err)
