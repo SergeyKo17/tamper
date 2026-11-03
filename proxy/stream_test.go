@@ -86,6 +86,51 @@ func echoStream(t *testing.T, conn *grpc.ClientConn, bodies [][]byte) [][]byte {
 	return got
 }
 
+// TestProxy_ClientSendsAfterTargetAnswered drives the window the request pump
+// outlives the handler in: the target answers the first message and ends the
+// call while the client is still sending, so the pump is left in a RecvMsg on a
+// stream grpc-go has already finished. Nothing here can assert that window is
+// safe — that is what -race watches for on CI.
+func TestProxy_ClientSendsAfterTargetAnswered(t *testing.T) {
+	p := startProxy(t, startEcho(t), nil)
+	conn := dialProxy(t, p)
+
+	desc := &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
+	cs, err := conn.NewStream(context.Background(), desc, "/test/Echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sending never stops on its own, so messages are still arriving when
+	// the handler returns.
+	body := rawBytes(payload('x', 2048))
+	go func() {
+		for {
+			if err := cs.SendMsg(&body); err != nil {
+				return
+			}
+		}
+	}()
+
+	var resp rawBytes
+	if err := cs.RecvMsg(&resp); err != nil {
+		t.Fatalf("the echoed message never arrived: %v", err)
+	}
+	if !bytes.Equal(resp, body) {
+		t.Errorf("expected %d bytes back, got %d", len(body), len(resp))
+	}
+
+	// The target returned without an error, so the call ends with OK however
+	// long the client went on sending into it.
+	if err := cs.RecvMsg(&resp); !errors.Is(err, io.EOF) {
+		t.Errorf("expected the call to end with OK, got %v", err)
+	}
+
+	if got := echoStream(t, conn, [][]byte{payload('y', 2048)}); len(got) != 1 {
+		t.Errorf("expected the next call to still work, got %d messages back", len(got))
+	}
+}
+
 func TestProxy_LargePayload(t *testing.T) {
 	p := startProxy(t, startStreamEcho(t), nil)
 	conn := dialProxy(t, p)

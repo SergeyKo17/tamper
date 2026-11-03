@@ -54,6 +54,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := proxy.Close(); err != nil {
+			slog.Error("proxy close", "err", err)
+		}
+	}()
 	go reloadOnHUP(ctx, hup, watcher)
 
 	slog.Info("tamper started",

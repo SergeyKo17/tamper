@@ -142,17 +142,41 @@ it does not help here, and the signal is what reloads the proxy.
 
 ## Stopping
 
-SIGINT and SIGTERM stop the proxy. New connections are refused at once, and
-calls already in flight are given five seconds to finish.
+SIGINT and SIGTERM stop the proxy. New connections are refused at once, and the
+calls in flight are ended rather than waited for. Each client is told why:
 
-Calls still open after that are dropped, and their clients see a transport
-error. The wait is capped on purpose: tamper relays every call as a stream, so
-a `drop` rule, or a target that stops answering, leaves behind a call that would
-hold the process open forever. The forced stop is reported:
+```
+rpc error: code = Unavailable desc = proxy is shutting down
+```
+
+Waiting them out is not an option: tamper relays every call as a stream, so a
+target that stops answering leaves behind a call that would hold the process
+open forever. Ending them deliberately also keeps the shutdown
+apart from an injected fault, which a torn connection would be
+indistinguishable from.
+
+What is left to wait for is whatever the calls have not let go of: a client that
+has not closed its connection once it saw the GOAWAY, or one that stopped
+reading a response. Cancelling a call reaches its target side, not the client
+side. Usually all of it costs a round trip:
+
+```json
+{"level":"INFO","msg":"stopping","reason":"context canceled"}
+{"level":"INFO","msg":"graceful stop","duration":"1.2ms"}
+```
+
+The first line says what started the stop. It matters when nothing asked for
+one: should the listener fail on its own, the reason reads `serve failed`, and
+the lines that follow are about an already broken proxy rather than about this
+one.
+
+Five seconds is the limit, and past it the transport is torn down — the only
+thing that unblocks a write to a client that is not reading:
 
 ```json
 {"level":"WARN","msg":"graceful stop timed out","timeout":"5s"}
 ```
+
 In a container the cap is what makes the difference. `docker stop` sends
 SIGTERM and follows it with SIGKILL ten seconds later; five seconds leaves the
 forced stop room to finish before the process is killed outright.

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -47,6 +48,53 @@ func startHang(t *testing.T) (addr string, called chan struct{}) {
 	return lis.Addr().String(), called
 }
 
+// startFlood serves a call that keeps sending large responses for as long as
+// the stream lives. Every send is reported on sent, so a test can tell when the
+// chain ahead has backed up.
+func startFlood(t *testing.T) (addr string, sent chan struct{}) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent = make(chan struct{}, 1024)
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		msg := rawBytes(make([]byte, 64*1024))
+		for {
+			if err := stream.SendMsg(&msg); err != nil {
+				return err
+			}
+			select {
+			case sent <- struct{}{}:
+			default:
+			}
+		}
+	}))
+	t.Cleanup(srv.Stop)
+	go srv.Serve(lis)
+	return lis.Addr().String(), sent
+}
+
+// waitBackedUp returns once the target has gone quiet for a while: its sends
+// stop getting through when the window ahead is spent, which is the proxy
+// blocked on a send of its own.
+func waitBackedUp(t *testing.T, sent chan struct{}) {
+	t.Helper()
+	giveUp := time.After(5 * time.Second)
+	for {
+		select {
+		case <-sent:
+		case <-time.After(300 * time.Millisecond):
+			return
+		case <-giveUp:
+			t.Fatal("the target kept sending: the chain never backed up")
+		}
+	}
+}
+
 func startEcho(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -80,6 +128,7 @@ func startProxyWithConfig(t *testing.T, cfg *config.Config, injects *fault.Injec
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { p.Close() })
 
 	go p.Run(ctx)
 
@@ -253,7 +302,7 @@ func TestProxy_ChainThreadsContext(t *testing.T) {
 	}
 }
 
-func TestProxy_RunStopsOnHungCall(t *testing.T) {
+func TestProxy_ShutdownCancelsHungCall(t *testing.T) {
 	logs := captureLogs(t)
 	addr, called := startHang(t)
 
@@ -266,34 +315,165 @@ func TestProxy_RunStopsOnHungCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.stopTimeout = 50 * time.Millisecond
+	defer p.Close()
 
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
 
 	conn := dialProxy(t, p)
+	callErr := make(chan error, 1)
 	go func() {
 		body := rawBytes([]byte("hello"))
 		var resp rawBytes
-		_ = conn.Invoke(context.Background(), "/test/Echo", &body, &resp)
+		callErr <- conn.Invoke(context.Background(), "/test/Echo", &body, &resp)
 	}()
 
-	// The call reached the target and never comes back, so a graceful stop
-	// cannot finish on its own.
+	// The call reached the target and never comes back, so it only ends if the
+	// shutdown cancels it.
 	<-called
+	cancel()
+
+	select {
+	case err := <-callErr:
+		assertStatus(t, err, codes.Unavailable, "proxy is shutting down")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call did not return after the shutdown")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(p.stopTimeout + 2*time.Second):
+		t.Fatal("Run did not return after the shutdown")
+	}
+
+	// Ending the call is what lets the graceful stop finish by itself. Had it
+	// been left hanging, only the cap would have ended the stop.
+	if out := logs.String(); strings.Contains(out, "graceful stop timed out") {
+		t.Errorf("the stop fell back to the cap: %s", out)
+	}
+}
+
+// TestProxy_ServeFailureStopsCalls covers the exit nobody asked for: the
+// listener dies while the proxy is serving. The context is never canceled here,
+// so the stop can only start from the error Serve returned.
+func TestProxy_ServeFailureStopsCalls(t *testing.T) {
+	logs := captureLogs(t)
+	addr, called := startHang(t)
+
+	ctx := context.Background()
+	p, err := New(ctx, &config.Config{
+		Listen: config.Listen{Addr: "127.0.0.1:0"},
+		Target: config.Target{Addr: addr},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+
+	conn := dialProxy(t, p)
+	callErr := make(chan error, 1)
+	go func() {
+		body := rawBytes([]byte("hello"))
+		var resp rawBytes
+		callErr <- conn.Invoke(context.Background(), "/test/Echo", &body, &resp)
+	}()
+
+	// The call is already through to the target, so closing the listener costs
+	// the proxy its next Accept and nothing else.
+	<-called
+	if err := p.lis.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-callErr:
+		assertStatus(t, err, codes.Unavailable, "proxy is shutting down")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call outlived the listener")
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Run: got %v, want %v", err, net.ErrClosed)
+		}
+	case <-time.After(p.stopTimeout + 2*time.Second):
+		t.Fatal("Run did not return after the listener failed")
+	}
+
+	if out := logs.String(); !strings.Contains(out, `"reason":"serve failed"`) {
+		t.Errorf("the stop did not name what started it: %s", out)
+	}
+}
+
+// TestProxy_StopTimeoutDropsStuckCall covers the forced stop. Cancelling a call
+// reaches the target side of it, so a client that stops reading leaves the
+// proxy blocked on a send nothing can interrupt: only tearing the transport
+// down once stopTimeout is spent ends the call.
+func TestProxy_StopTimeoutDropsStuckCall(t *testing.T) {
+	logs := captureLogs(t)
+	addr, sent := startFlood(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := New(ctx, &config.Config{
+		Listen: config.Listen{Addr: "127.0.0.1:0"},
+		Target: config.Target{Addr: addr},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.stopTimeout = 100 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+
+	// The stream is opened and never read from. Its context is held so that the
+	// call stays open, since the proxy only blocks while a client is there to
+	// not read.
+	streamCtx, closeStream := context.WithCancel(context.Background())
+	defer closeStream()
+	conn := dialProxy(t, p)
+	desc := grpc.StreamDesc{StreamName: "Flood", ClientStreams: true, ServerStreams: true}
+	cs, err := conn.NewStream(streamCtx, &desc, "/test/Flood")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := rawBytes([]byte("go"))
+	if err := cs.SendMsg(&body); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+
+	waitBackedUp(t, sent)
+
 	stopped := time.Now()
 	cancel()
 
 	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(p.stopTimeout + 2*time.Second):
 		t.Fatal("Run did not return after the stop timeout")
 	}
 
+	// Returning early would mean the call ended on its own, and the whole cap
+	// rests on it not being able to.
 	if elapsed := time.Since(stopped); elapsed < p.stopTimeout {
-		t.Errorf("Run returned in %v, before the %v timeout", elapsed, p.stopTimeout)
+		t.Errorf("Run returned in %v, before the %v cap", elapsed, p.stopTimeout)
 	}
 	if out := logs.String(); !strings.Contains(out, "graceful stop timed out") {
-		t.Errorf("no timeout in the log: %s", out)
+		t.Errorf("the forced stop is not in the log: %s", out)
 	}
 }
