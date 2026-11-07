@@ -126,6 +126,10 @@ A file that does not parse is logged and otherwise ignored: the rules in force
 stay in force, because a typo should not quietly leave the proxy injecting
 nothing.
 
+A changed `listen` or `target` is not applied: those are read once, at startup.
+The reload says so, naming the fields it left alone, so the line in the log is
+not just `configuration reloaded`.
+
 ### In a container
 
 The signal is not a convenience there, it is the only way:
@@ -351,6 +355,29 @@ leg, when that leg is done, since a stream can carry thousands of messages:
 
 `messages` is how many passed through that leg, `rules` how many times each rule
 fired on them. A leg no rule covers stays silent.
+
+## Scope and limits
+
+tamper belongs in a test environment, next to the client it is breaking traffic
+for. Two things decide that, and neither is a bug:
+
+- **Nothing authenticates on `listen`.** Whatever reaches the port gets its
+  calls relayed to the target, so a listener open to the network is an open
+  relay into the backend, around everything that used to stand in front of the
+  service. Keep the address on loopback — `127.0.0.1:9090`, as the examples
+  have it — or inside a network you trust, and prefer a sidecar next to one
+  client over a shared endpoint. A container has to bind `0.0.0.0` to be
+  reachable at all, so publish the port to loopback instead:
+  `-p 127.0.0.1:9090:9090`.
+- **`insecure_skip_verify` drops verification of the target certificate.** It
+  exists for a self-signed staging cert, and it is a hole in that connection
+  everywhere else.
+
+So: not between real users and a live service. There is no flag or
+configuration that changes this — the tool exists to make calls fail.
+
+Found a security problem in tamper itself? Open an issue; there is no private
+channel yet.
 
 ## Use cases
 
