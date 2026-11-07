@@ -1,6 +1,9 @@
 # Side facing gRPC clients: tamper is the server here.
 listen:
-  addr: ":9090"
+  # Loopback on purpose: nothing authenticates on this side, so an address open
+  # to the network relays any caller through to the target. A container is the
+  # exception -- bind "0.0.0.0:9090" there and publish the port to loopback.
+  addr: "127.0.0.1:9090"
   # Serve TLS to clients. Without this block the listener is plaintext.
   # tls:
   #   cert_file: "certs/tamper-server.crt"
