@@ -48,6 +48,9 @@ archives:
     # back to the repository to find out what one looks like.
     files:
       - README.md
+      - CONFIGURATION.md
+      - FAULTS.md
+      - OPERATIONS.md
       - LICENSE
       - tamper.example.yml
 
