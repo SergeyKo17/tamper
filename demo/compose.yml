@@ -1,0 +1,18 @@
+services:
+  echo:
+    build:
+      context: ..
+      dockerfile: demo/echo/Dockerfile
+    ports:
+      - "127.0.0.1:50051:50051"
+
+  tamper:
+    build:
+      context: ..
+    command: ["-config", "/etc/tamper/demo.yml"]
+    volumes:
+      - ./config:/etc/tamper:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - echo
