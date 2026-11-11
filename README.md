@@ -5,6 +5,17 @@
 
 gRPC fault injection proxy for testing service resilience.
 
+## Demo
+
+![A delay rule becoming an abort, applied without a restart](demo/demo.gif)
+
+Two containers: a small echo server, and tamper in front of it. The call
+through the proxy is held for two seconds; one line of the config then turns
+`delay` into `abort`, a `SIGHUP` reloads it, and the next call fails without
+ever reaching the server.
+
+The stack runs with `docker compose up -d` — see [demo/](demo/README.md).
+
 ## How it works
 
 ```

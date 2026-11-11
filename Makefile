@@ -1,4 +1,4 @@
-.PHONY: lint test build docker snapshot vuln
+.PHONY: lint test build docker snapshot vuln demo-proto
 
 # Overridable from the outside: make build VERSION=v0.1.0. git describe reports
 # the tag when HEAD sits on one, and the commit with a -dirty suffix otherwise,
@@ -6,6 +6,9 @@
 VERSION ?= $(shell git describe --tags --always --dirty)
 COMMIT  ?= $(shell git rev-parse --short HEAD)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
+
+DEMO_DIR := demo/echo
+DEMO_MOD := github.com/SergeyKo17/tamper/demo/echo
 
 lint:
 	golangci-lint run ./...
@@ -32,3 +35,6 @@ snapshot:
 # depends on the day's vulnerability database, not on the code.
 vuln:
 	go tool govulncheck ./...
+
+demo-proto:
+	protoc -I $(DEMO_DIR) --go_out=$(DEMO_DIR) --go_opt=module=$(DEMO_MOD) --go-grpc_out=$(DEMO_DIR) --go-grpc_opt=module=$(DEMO_MOD) echo.proto

@@ -1,0 +1,23 @@
+listen:
+  addr: "0.0.0.0:9090"
+
+target:
+  addr: "echo:50051"
+
+# Debug: a fault that fired is reported at that level.
+logger:
+  level: "debug"
+
+rules:
+  # The demo flips one line: type delay -> abort, then SIGHUP. Both the
+  # duration and the code sit here already, and a field belonging to the other
+  # type is ignored.
+  - match:
+      method: "/demo.Echo/Say"
+    fault:
+      name: "say-fault"
+      type: delay
+      prob: 1.0
+      duration: 2s
+      code: 14
+      msg: "injected by tamper"

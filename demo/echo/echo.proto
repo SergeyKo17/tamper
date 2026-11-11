@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package demo;
+
+option go_package = "github.com/SergeyKo17/tamper/demo/echo/echopb;echopb";
+
+message SayRequest {
+  string text = 1;
+}
+
+message SayResponse {
+  string text = 1;
+}
+
+service Echo {
+  rpc Say(SayRequest) returns (SayResponse);
+}
