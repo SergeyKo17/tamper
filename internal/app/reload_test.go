@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/SergeyKo17/tamper/config"
+	"github.com/SergeyKo17/tamper/internal/config"
 )
 
 // captureWarn redirects the default logger into a buffer for the length of the

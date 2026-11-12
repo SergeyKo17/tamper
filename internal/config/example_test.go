@@ -6,7 +6,7 @@ import (
 )
 
 // examplePath is the shipped configuration, one directory up from this package.
-const examplePath = "../tamper.example.yml"
+const examplePath = "../../tamper.example.yml"
 
 // The example is what a new user copies, so it has to survive the same strict
 // parsing and validation as a real configuration.

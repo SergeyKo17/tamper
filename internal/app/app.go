@@ -4,9 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/SergeyKo17/tamper/config"
-	"github.com/SergeyKo17/tamper/fault"
-	"github.com/SergeyKo17/tamper/proxy"
+	"github.com/SergeyKo17/tamper/internal/config"
+	"github.com/SergeyKo17/tamper/internal/fault"
+	"github.com/SergeyKo17/tamper/internal/proxy"
 )
 
 // New loads the configuration, creates fault injectors, and assembles the

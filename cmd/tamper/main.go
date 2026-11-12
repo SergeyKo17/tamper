@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/SergeyKo17/tamper/app"
-	"github.com/SergeyKo17/tamper/config"
+	"github.com/SergeyKo17/tamper/internal/app"
+	"github.com/SergeyKo17/tamper/internal/config"
 )
 
 var (
