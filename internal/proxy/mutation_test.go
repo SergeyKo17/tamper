@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SergeyKo17/tamper/config"
-	"github.com/SergeyKo17/tamper/fault"
+	"github.com/SergeyKo17/tamper/internal/config"
+	"github.com/SergeyKo17/tamper/internal/fault"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )

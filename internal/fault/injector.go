@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/SergeyKo17/tamper/config"
+	"github.com/SergeyKo17/tamper/internal/config"
 )
 
 // Injects holds the active rules, split by the stage they act on.

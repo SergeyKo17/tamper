@@ -1,6 +1,9 @@
 # Drives the recorded demo: prints each command as if typed, runs it, holds the
-# frame. Run it from this directory, with a screen recorder capturing the
-# terminal window.
+# frame. Run it with a screen recorder capturing the terminal window.
+
+# Every path below is relative to this script, so the caller's directory does
+# not matter.
+Set-Location $PSScriptRoot
 
 function Show-Command([string]$cmd, [int]$pause = 2) {
     Write-Host -NoNewline "PS demo> " -ForegroundColor Green

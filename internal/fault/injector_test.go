@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SergeyKo17/tamper/config"
+	"github.com/SergeyKo17/tamper/internal/config"
 )
 
 func TestNew_Delay(t *testing.T) {

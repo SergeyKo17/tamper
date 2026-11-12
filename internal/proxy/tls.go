@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/SergeyKo17/tamper/config"
+	"github.com/SergeyKo17/tamper/internal/config"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
