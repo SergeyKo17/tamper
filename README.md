@@ -44,7 +44,7 @@ schema and is not part of this release.
 
 Faults are reloaded while the proxy runs, without dropping connections, either
 when the file changes or on a signal. See
-[Reloading the configuration](OPERATIONS.md#reloading-the-configuration).
+[Reloading the configuration](docs/OPERATIONS.md#reloading-the-configuration).
 
 ## Install
 
@@ -118,15 +118,15 @@ Five fault types are available:
 | `drop` | Swallows a message, telling neither side |
 
 Each takes a probability and a method pattern, and rules may overlap. The
-fields, the matching and what stacking means are in [FAULTS.md](FAULTS.md).
+fields, the matching and what stacking means are in [FAULTS.md](docs/FAULTS.md).
 
 ## Documentation
 
-- [CONFIGURATION.md](CONFIGURATION.md) — every config field, TLS on both sides,
-  and what the logs contain
-- [FAULTS.md](FAULTS.md) — rule matching and the five fault types in detail
-- [OPERATIONS.md](OPERATIONS.md) — reloading the configuration and stopping the
-  proxy
+- [CONFIGURATION.md](docs/CONFIGURATION.md) — every config field, TLS on both
+  sides, and what the logs contain
+- [FAULTS.md](docs/FAULTS.md) — rule matching and the five fault types in detail
+- [OPERATIONS.md](docs/OPERATIONS.md) — reloading the configuration and stopping
+  the proxy
 
 ## Scope and limits
 

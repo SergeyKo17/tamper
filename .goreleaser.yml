@@ -46,13 +46,14 @@ archives:
     # The example configuration travels with the binary: tamper needs a -config
     # to do anything, and whoever downloaded an archive should not have to go
     # back to the repository to find out what one looks like.
+    # The reference keeps its directory inside the archive, so the links the
+    # README carries resolve in an unpacked archive as they do in the
+    # repository.
     files:
       - README.md
-      - CONFIGURATION.md
-      - FAULTS.md
-      - OPERATIONS.md
       - LICENSE
       - tamper.example.yml
+      - docs/*.md
 
 checksum:
   name_template: checksums.txt
