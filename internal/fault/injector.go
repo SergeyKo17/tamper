@@ -9,8 +9,8 @@ import (
 
 // Injects holds the active rules, split by the stage they act on.
 type Injects struct {
-	Call    []Inject        // delay, abort — до отправки
-	Message []MessageInject // truncate, corrupt, drop — на каждое сообщение
+	Call    []Inject        // delay, abort — before anything is forwarded
+	Message []MessageInject // truncate, corrupt, drop — on every message
 }
 
 // Inject pairs a request matcher with a fault injector. Name and Probability
