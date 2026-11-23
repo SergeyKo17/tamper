@@ -14,7 +14,15 @@ import (
 // caller's handler reads, and every reload keeps it current. The watcher comes
 // back so the caller can trigger a reload of its own.
 func New(ctx context.Context, path string, lvl *slog.LevelVar) (*proxy.Proxy, *config.Watcher, error) {
-	watcher, err := config.Watch(ctx, path)
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	ok := false
+	defer func() {
+		if !ok {
+			cancelWatch()
+		}
+	}()
+
+	watcher, err := config.Watch(watchCtx, path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -30,7 +38,9 @@ func New(ctx context.Context, path string, lvl *slog.LevelVar) (*proxy.Proxy, *c
 		return nil, nil, err
 	}
 
+	ok = true
 	go func() {
+		defer cancelWatch()
 		for {
 			select {
 			case <-watcher.Updates():
@@ -44,6 +54,7 @@ func New(ctx context.Context, path string, lvl *slog.LevelVar) (*proxy.Proxy, *c
 					continue
 				}
 				proxy.SetInjects(newInjects)
+				slog.Info("configuration reloaded")
 			case <-ctx.Done():
 				return
 			}
