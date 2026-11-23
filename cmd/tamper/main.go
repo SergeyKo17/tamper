@@ -82,7 +82,6 @@ func reloadOnHUP(ctx context.Context, hup <-chan os.Signal, watcher *config.Watc
 				slog.Error("reload config", "err", err)
 				continue
 			}
-			slog.Info("configuration reloaded")
 		case <-ctx.Done():
 			return
 		}
